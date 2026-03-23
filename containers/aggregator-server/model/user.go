@@ -1,7 +1,6 @@
 package model
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -33,11 +32,11 @@ type User struct {
 
 func (u *User) ConfigEndpoints() map[string]string {
 	return map[string]string{
-		"services": fmt.Sprintf("http://%s/config/%s/services", ExternalHost, u.Namespace),
+		"services": PublicURL("/config/" + u.Namespace + "/services"),
 	}
 }
 
 // GetAggregatorURL returns the aggregator description URL for a namespace.
 func GetAggregatorURL(namespace string) string {
-	return fmt.Sprintf("%s://%s/config/%s", Protocol, ExternalHost, namespace)
+	return PublicURL("/config/" + namespace)
 }

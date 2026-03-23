@@ -36,9 +36,11 @@ func main() {
 	}
 	model.Protocol = "http"
 	model.ExternalHost = externalBase
+	model.ExternalBasePath = ""
 	if parsed, err := url.Parse(externalBase); err == nil && parsed.Scheme != "" {
 		model.Protocol = strings.ToLower(parsed.Scheme)
 		model.ExternalHost = parsed.Host
+		model.ExternalBasePath = strings.TrimSuffix(parsed.Path, "/")
 	}
 
 	// Read Authorization configuration from environment variables

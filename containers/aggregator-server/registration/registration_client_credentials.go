@@ -122,7 +122,7 @@ func handleClientCredentialsFlow(w http.ResponseWriter, req model.RegistrationRe
 			return
 		}
 
-		clientURI := fmt.Sprintf("%s://%s", model.Protocol, model.ExternalHost)
+		clientURI := model.PublicBaseURL()
 		rsClientID, rsClientSecret, pat, err := ensurePATForUMA(configCtx, umaConfig, tokenResp.AccessToken, clientURI)
 		if err != nil {
 			logrus.WithError(err).Error("Unable to obtain UMA protection API token")

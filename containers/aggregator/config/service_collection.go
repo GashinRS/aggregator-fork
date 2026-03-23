@@ -49,7 +49,7 @@ func InitUserConfiguration(mux *http.ServeMux, user model.User) error {
 }
 
 func (config *UserConfigData) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request), scopes []model.Scope) error {
-	fullURL := fmt.Sprintf("%s://%s%s", model.Protocol, model.ExternalHost, pattern)
+	fullURL := model.PublicURL(pattern)
 	logrus.Debugf("Registering handler for pattern '%s' at URL '%s'", pattern, fullURL)
 
 	if err := auth.RegisterResource(fullURL, config.owner.AuthzServerURL, scopes); err != nil {
@@ -96,7 +96,7 @@ func (config *UserConfigData) getServices(w http.ResponseWriter, _ *http.Request
 		if service == nil {
 			continue
 		}
-		url := fmt.Sprintf("%s://%s/config/%s/services/%s", model.Protocol, model.ExternalHost, service.Namespace, service.Id)
+		url := model.PublicURL("/config/" + service.Namespace + "/services/" + service.Id)
 		serviceList = append(serviceList, url)
 	}
 	config.servicesMu.RUnlock()

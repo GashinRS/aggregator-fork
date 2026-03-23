@@ -237,7 +237,7 @@ func createDeployment(service *model.Service, replicas int32, useUMA bool, ctx c
 			{Name: "HTTP_PROXY", Value: fmt.Sprintf("http://egress-uma.%s.svc.cluster.local:8080", service.Namespace)},
 			{Name: "http_proxy", Value: fmt.Sprintf("http://egress-uma.%s.svc.cluster.local:8080", service.Namespace)},
 			{Name: "DERIVED_RESOURCE_ENDPOINT", Value: fmt.Sprintf("http://aggregator.%s.svc.cluster.local:5000/derived-resources", service.Namespace)},
-			{Name: "RESOURCE_LOCATION", Value: fmt.Sprintf("http://%s/services/%s/%s", model.ExternalHost, service.Namespace, service.Id)},
+			{Name: "RESOURCE_LOCATION", Value: model.PublicURL("/services/" + service.Namespace + "/" + service.Id)},
 		}, container.Env...)
 	}
 
@@ -418,7 +418,7 @@ func createIngressRoute(service *model.Service, owner model.User, ctx context.Co
 	}
 
 	// Register resource & endpoint with policies
-	resourceID := fmt.Sprintf("http://%s/services/%s/%s", model.ExternalHost, namespace, service.Id)
+	resourceID := model.PublicURL("/services/" + namespace + "/" + service.Id)
 	if err := auth.RegisterResource(resourceID, owner.AuthzServerURL, []model.Scope{model.Read}); err != nil {
 		return fmt.Errorf("failed to register resource for IngressRoute %q: %w", irName, err)
 	}

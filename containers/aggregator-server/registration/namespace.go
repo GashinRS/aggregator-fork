@@ -490,7 +490,7 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 								{ContainerPort: 5000},
 							},
 							Env: []corev1.EnvVar{
-								{Name: "AGGREGATOR_EXTERNAL_HOST", Value: fmt.Sprintf("%s://%s", model.Protocol, model.ExternalHost)},
+								{Name: "AGGREGATOR_EXTERNAL_HOST", Value: model.PublicBaseURL()},
 								{Name: "CLIENT_ID", Value: model.ClientId},
 								{Name: "CLIENT_SECRET", Value: model.ClientSecret},
 								{Name: "LOG_LEVEL", Value: model.LogLevel.String()},

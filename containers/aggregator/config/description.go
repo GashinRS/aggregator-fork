@@ -28,7 +28,7 @@ func InitAggregatorDescription(mux *http.ServeMux, user model.User) error {
 		handleAggregatorDescription(w, r, user)
 	})
 
-	fullURL := fmt.Sprintf("%s://%s/config/%s", model.Protocol, model.ExternalHost, user.Namespace)
+	fullURL := model.PublicURL("/config/" + user.Namespace)
 	if err := auth.RegisterResource(fullURL, user.AuthzServerURL, []model.Scope{model.Read}); err != nil {
 		return fmt.Errorf("failed to register aggregator description %s: %w", fullURL, err)
 	}
@@ -66,12 +66,12 @@ func handleAggregatorDescription(w http.ResponseWriter, r *http.Request, user mo
 
 	// TODO: semantic representations need to be added at some point
 	desc := AggregatorDescription{
-		ID:                    fmt.Sprintf("%s://%s/config/%s", model.Protocol, model.ExternalHost, user.Namespace),
+		ID:                    model.PublicURL("/config/" + user.Namespace),
 		CreatedAt:             createdAt,
 		LoginStatus:           loginStatus,
 		TokenExpiry:           tokenExpiry,
-		TransformationCatalog: fmt.Sprintf("%s://%s/config/%s/transformations", model.Protocol, model.ExternalHost, user.Namespace),
-		ServiceCollection:     fmt.Sprintf("%s://%s/config/%s/services", model.Protocol, model.ExternalHost, user.Namespace),
+		TransformationCatalog: model.PublicURL("/config/" + user.Namespace + "/transformations"),
+		ServiceCollection:     model.PublicURL("/config/" + user.Namespace + "/services"),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

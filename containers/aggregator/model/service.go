@@ -145,7 +145,7 @@ func (service *Service) MarshalJSON() ([]byte, error) {
 	}
 
 	out := serviceJSON{
-		ID:             fmt.Sprintf("%s://%s/config/%s/services/%s", Protocol, ExternalHost, service.Namespace, service.Id),
+		ID:             PublicURL("/config/" + service.Namespace + "/services/" + service.Id),
 		Status:         status,
 		StatusText:     service.StatusText,
 		Transformation: service.Description,

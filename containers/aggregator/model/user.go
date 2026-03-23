@@ -1,9 +1,5 @@
 package model
 
-import (
-	"fmt"
-)
-
 type User struct {
 	UserId         string
 	AccessToken    string
@@ -15,6 +11,6 @@ type User struct {
 
 func (u *User) ConfigEndpoints() map[string]string {
 	return map[string]string{
-		"services": fmt.Sprintf("http://%s/config/%s/services", ExternalHost, u.Namespace),
+		"services": PublicURL("/config/" + u.Namespace + "/services"),
 	}
 }

@@ -17,7 +17,7 @@ type TransformationsConfigData struct {
 func InitTransformationsConfiguration(mux *http.ServeMux) error {
 	logrus.Info("Initializing transformations configuration")
 
-	transformations := fmt.Sprintf(hardcodedAvailableTransformationsTemplate, model.ExternalHost)
+	transformations := fmt.Sprintf(hardcodedAvailableTransformationsTemplate, model.PublicURL("/config/transformations"))
 
 	config := TransformationsConfigData{
 		etagTransformations: 0,
@@ -78,7 +78,7 @@ func (config *TransformationsConfigData) getAvailableTransformations(w http.Resp
 }
 
 const hardcodedAvailableTransformationsTemplate = `
-@base <http://%s/config/transformations#> .
+@base <%s#> .
 @prefix fno: <https://w3id.org/function/ontology#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .

@@ -8,6 +8,7 @@ import (
 
 var Protocol string
 var ExternalHost string
+var ExternalBasePath string
 
 var ClientId string
 var ClientSecret string

@@ -3,7 +3,6 @@ package config
 import (
 	"aggregator/model"
 	"encoding/json"
-	"fmt"
 	"net/http"
 )
 
@@ -38,11 +37,11 @@ func handleServerDescription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	desc := AggregatorServerDescription{
-		RegistrationEndpoint: fmt.Sprintf("%s://%s/registration", model.Protocol, model.ExternalHost),
+		RegistrationEndpoint:       model.PublicURL("/registration"),
 		SupportedRegistrationTypes: supported,
-		Version:               "1.0.0",
-		ClientIdentifier:      fmt.Sprintf("%s://%s/client.json", model.Protocol, model.ExternalHost),
-		TransformationCatalog: fmt.Sprintf("%s://%s/config/transformations", model.Protocol, model.ExternalHost),
+		Version:                    "1.0.0",
+		ClientIdentifier:           model.PublicURL("/client.json"),
+		TransformationCatalog:      model.PublicURL("/config/transformations"),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
