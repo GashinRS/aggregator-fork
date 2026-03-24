@@ -1178,12 +1178,13 @@ func createService(t *testing.T, collectionURL string, authToken string) service
 	t.Helper()
 
 	// Build FnO Turtle description
-	source := "http://example.org/source"
 	query := "SELECT * WHERE { ?s ?p ?o }"
 
 	// Extract transformation catalog from aggregator server
 	serverDesc := fetchAggregatorServerDescription(t)
 	transformationsCatalog := serverDesc["transformation_catalog"].(string)
+	// Use an in-cluster/public aggregator URL as source to avoid external-network flakiness.
+	source := transformationsCatalog
 
 	turtleBody := fmt.Sprintf(`@prefix config: <%s> .
 @prefix fno: <https://w3id.org/function/ontology#> .

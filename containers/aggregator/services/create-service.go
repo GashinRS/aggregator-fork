@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -341,6 +342,8 @@ func createIngressRoute(service *model.Service, owner model.User, ctx context.Co
 
 	useUMA := strings.TrimSpace(owner.AuthzServerURL) != ""
 	hostMatch := hostWithoutPort(model.ExternalHost)
+	servicePathPrefixes := publicPathVariants("/services/" + namespace + "/" + service.Id)
+	rewriteMiddlewareName := "rewrite-service-path-" + service.Id
 	middlewares := []interface{}{
 		map[string]interface{}{
 			"name":      "cors",
@@ -354,9 +357,37 @@ func createIngressRoute(service *model.Service, owner model.User, ctx context.Co
 		})
 	}
 	middlewares = append(middlewares, map[string]interface{}{
-		"name":      "replace-path",
-		"namespace": "aggregator-app",
+		"name":      rewriteMiddlewareName,
+		"namespace": namespace,
 	})
+
+	middlewareGVR := schema.GroupVersionResource{
+		Group:    "traefik.io",
+		Version:  "v1alpha1",
+		Resource: "middlewares",
+	}
+	rewriteMiddlewareObj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "Middleware",
+			"metadata": map[string]interface{}{
+				"name":      rewriteMiddlewareName,
+				"namespace": namespace,
+			},
+			"spec": map[string]interface{}{
+				"replacePathRegex": map[string]interface{}{
+					"regex":       serviceRewriteRegex(servicePathPrefixes),
+					"replacement": "/$1",
+				},
+			},
+		},
+	}
+	if _, err := model.DynamicClient.
+		Resource(middlewareGVR).
+		Namespace(namespace).
+		Create(ctx, rewriteMiddlewareObj, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create service rewrite middleware %s: %w", rewriteMiddlewareName, err)
+	}
 
 	// Define IngressRoute spec
 	obj := &unstructured.Unstructured{
@@ -371,7 +402,7 @@ func createIngressRoute(service *model.Service, owner model.User, ctx context.Co
 				"entryPoints": []string{"web"},
 				"routes": []interface{}{
 					map[string]interface{}{
-						"match": "Host(`" + hostMatch + "`) && PathPrefix(`/services/" + namespace + "/" + service.Id + "`) && Method(`OPTIONS`)",
+						"match": "Host(`" + hostMatch + "`) && " + servicePrefixRule(servicePathPrefixes) + " && Method(`OPTIONS`)",
 						"kind":  "Rule",
 						"services": []interface{}{
 							map[string]interface{}{
@@ -386,13 +417,13 @@ func createIngressRoute(service *model.Service, owner model.User, ctx context.Co
 								"namespace": namespace,
 							},
 							map[string]interface{}{
-								"name":      "replace-path",
-								"namespace": "aggregator-app",
+								"name":      rewriteMiddlewareName,
+								"namespace": namespace,
 							},
 						},
 					},
 					map[string]interface{}{
-						"match": "Host(`" + hostMatch + "`) && PathPrefix(`/services/" + namespace + "/" + service.Id + "`)",
+						"match": "Host(`" + hostMatch + "`) && " + servicePrefixRule(servicePathPrefixes),
 						"kind":  "Rule",
 						"services": []interface{}{
 							map[string]interface{}{
@@ -444,4 +475,42 @@ func hostWithoutPort(hostport string) string {
 		}
 	}
 	return hostport
+}
+
+func publicPathVariants(path string) []string {
+	paths := []string{path}
+	base := strings.TrimSuffix(model.ExternalBasePath, "/")
+	if base != "" {
+		paths = append(paths, base+path)
+	}
+	return uniquePathStrings(paths)
+}
+
+func servicePrefixRule(paths []string) string {
+	rules := make([]string, 0, len(paths))
+	for _, p := range paths {
+		rules = append(rules, "PathPrefix(`"+p+"`)")
+	}
+	return "(" + strings.Join(rules, " || ") + ")"
+}
+
+func uniquePathStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func serviceRewriteRegex(paths []string) string {
+	escaped := make([]string, 0, len(paths))
+	for _, path := range paths {
+		escaped = append(escaped, regexp.QuoteMeta(path))
+	}
+	return "^(?:" + strings.Join(escaped, "|") + ")(?:/(.*))?$"
 }

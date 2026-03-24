@@ -301,6 +301,9 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 	}
 
 	hostMatch := hostWithoutPort(model.ExternalHost)
+	configBasePaths := configPathVariants("/config/" + namespace)
+	servicesBasePaths := configPathVariants("/config/" + namespace + "/services")
+	transformationsBasePaths := configPathVariants("/config/" + namespace + "/transformations")
 
 	irName := "aggregator-instance-ingressroute"
 	obj := &unstructured.Unstructured{
@@ -315,7 +318,7 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 				"entryPoints": []string{"web"},
 				"routes": []interface{}{
 					map[string]interface{}{
-						"match": "Host(`" + hostMatch + "`) && (Path(`/config/" + namespace + "`) || Path(`/config/" + namespace + "/`)) && Method(`OPTIONS`)",
+						"match": "Host(`" + hostMatch + "`) && " + exactPathRule(configBasePaths) + " && Method(`OPTIONS`)",
 						"kind":  "Rule",
 						"services": []interface{}{
 							map[string]interface{}{
@@ -324,10 +327,10 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 								"namespace": namespace,
 							},
 						},
-						"middlewares": buildCorsOnlyMiddlewares(namespace, true),
+						"middlewares": buildCorsOnlyMiddlewares(namespace, true, false),
 					},
 					map[string]interface{}{
-						"match": "Host(`" + hostMatch + "`) && (Path(`/config/" + namespace + "`) || Path(`/config/" + namespace + "/`))",
+						"match": "Host(`" + hostMatch + "`) && " + exactPathRule(configBasePaths),
 						"kind":  "Rule",
 						"services": []interface{}{
 							map[string]interface{}{
@@ -336,10 +339,10 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 								"namespace": namespace,
 							},
 						},
-						"middlewares": buildIngressMiddlewares(useUMA, namespace, true),
+						"middlewares": buildIngressMiddlewares(useUMA, namespace, true, false),
 					},
 					map[string]interface{}{
-						"match": "Host(`" + hostMatch + "`) && PathPrefix(`/config/" + namespace + "/services`) && Method(`OPTIONS`)",
+						"match": "Host(`" + hostMatch + "`) && " + prefixPathRule(servicesBasePaths) + " && Method(`OPTIONS`)",
 						"kind":  "Rule",
 						"services": []interface{}{
 							map[string]interface{}{
@@ -348,10 +351,10 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 								"namespace": namespace,
 							},
 						},
-						"middlewares": buildCorsOnlyMiddlewares(namespace, false),
+						"middlewares": buildCorsOnlyMiddlewares(namespace, false, hasExternalBasePath()),
 					},
 					map[string]interface{}{
-						"match": "Host(`" + hostMatch + "`) && PathPrefix(`/config/" + namespace + "/services`)",
+						"match": "Host(`" + hostMatch + "`) && " + prefixPathRule(servicesBasePaths),
 						"kind":  "Rule",
 						"services": []interface{}{
 							map[string]interface{}{
@@ -360,10 +363,10 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 								"namespace": namespace,
 							},
 						},
-						"middlewares": buildIngressMiddlewares(useUMA, namespace, false),
+						"middlewares": buildIngressMiddlewares(useUMA, namespace, false, hasExternalBasePath()),
 					},
 					map[string]interface{}{
-						"match": "Host(`" + hostMatch + "`) && PathPrefix(`/config/" + namespace + "/transformations`) && Method(`OPTIONS`)",
+						"match": "Host(`" + hostMatch + "`) && " + prefixPathRule(transformationsBasePaths) + " && Method(`OPTIONS`)",
 						"kind":  "Rule",
 						"services": []interface{}{
 							map[string]interface{}{
@@ -372,10 +375,10 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 								"namespace": namespace,
 							},
 						},
-						"middlewares": buildCorsOnlyMiddlewares(namespace, true),
+						"middlewares": buildCorsOnlyMiddlewares(namespace, true, false),
 					},
 					map[string]interface{}{
-						"match": "Host(`" + hostMatch + "`) && PathPrefix(`/config/" + namespace + "/transformations`)",
+						"match": "Host(`" + hostMatch + "`) && " + prefixPathRule(transformationsBasePaths),
 						"kind":  "Rule",
 						"services": []interface{}{
 							map[string]interface{}{
@@ -384,7 +387,7 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 								"namespace": namespace,
 							},
 						},
-						"middlewares": buildIngressMiddlewares(useUMA, namespace, true),
+						"middlewares": buildIngressMiddlewares(useUMA, namespace, true, false),
 					},
 				},
 			},
@@ -408,7 +411,7 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 			},
 			"spec": map[string]interface{}{
 				"stripPrefix": map[string]interface{}{
-					"prefixes": []string{"/config/" + namespace},
+					"prefixes": configBasePaths,
 				},
 			},
 		},
@@ -417,6 +420,28 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 	_, err = model.DynamicClient.Resource(middlewareGVR).Namespace(namespace).Create(ctx, mwObj, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create Middleware: %w", err)
+	}
+
+	basePath := strings.TrimSuffix(model.ExternalBasePath, "/")
+	if basePath != "" {
+		baseStripObj := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "traefik.io/v1alpha1",
+				"kind":       "Middleware",
+				"metadata": map[string]interface{}{
+					"name":      "strip-external-base-" + namespace,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"stripPrefix": map[string]interface{}{
+						"prefixes": []string{basePath},
+					},
+				},
+			},
+		}
+		if _, err := model.DynamicClient.Resource(middlewareGVR).Namespace(namespace).Create(ctx, baseStripObj, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("failed to create external base strip middleware: %w", err)
+		}
 	}
 
 	corsObj := &unstructured.Unstructured{
@@ -565,7 +590,46 @@ func hostWithoutPort(hostport string) string {
 	return hostport
 }
 
-func buildIngressMiddlewares(useUMA bool, namespace string, includeStrip bool) []interface{} {
+func configPathVariants(path string) []string {
+	paths := []string{path}
+	base := strings.TrimSuffix(model.ExternalBasePath, "/")
+	if base != "" {
+		paths = append(paths, base+path)
+	}
+	return uniqueStrings(paths)
+}
+
+func exactPathRule(paths []string) string {
+	rules := make([]string, 0, len(paths)*2)
+	for _, p := range paths {
+		rules = append(rules, "Path(`"+p+"`)")
+		rules = append(rules, "Path(`"+p+"/`)")
+	}
+	return "(" + strings.Join(rules, " || ") + ")"
+}
+
+func prefixPathRule(paths []string) string {
+	rules := make([]string, 0, len(paths))
+	for _, p := range paths {
+		rules = append(rules, "PathPrefix(`"+p+"`)")
+	}
+	return "(" + strings.Join(rules, " || ") + ")"
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func buildIngressMiddlewares(useUMA bool, namespace string, includeStrip bool, includeBaseStrip bool) []interface{} {
 	middlewares := make([]interface{}, 0, 3)
 	middlewares = append(middlewares, map[string]interface{}{
 		"name":      "cors",
@@ -583,10 +647,16 @@ func buildIngressMiddlewares(useUMA bool, namespace string, includeStrip bool) [
 			"namespace": namespace,
 		})
 	}
+	if includeBaseStrip {
+		middlewares = append(middlewares, map[string]interface{}{
+			"name":      "strip-external-base-" + namespace,
+			"namespace": namespace,
+		})
+	}
 	return middlewares
 }
 
-func buildCorsOnlyMiddlewares(namespace string, includeStrip bool) []interface{} {
+func buildCorsOnlyMiddlewares(namespace string, includeStrip bool, includeBaseStrip bool) []interface{} {
 	middlewares := make([]interface{}, 0, 2)
 	middlewares = append(middlewares, map[string]interface{}{
 		"name":      "cors",
@@ -598,7 +668,17 @@ func buildCorsOnlyMiddlewares(namespace string, includeStrip bool) []interface{}
 			"namespace": namespace,
 		})
 	}
+	if includeBaseStrip {
+		middlewares = append(middlewares, map[string]interface{}{
+			"name":      "strip-external-base-" + namespace,
+			"namespace": namespace,
+		})
+	}
 	return middlewares
+}
+
+func hasExternalBasePath() bool {
+	return strings.TrimSpace(strings.TrimSuffix(model.ExternalBasePath, "/")) != ""
 }
 
 func buildTokensPayload(accessToken string, refreshToken string, accessTokenExpiry string, ownerToken string) (map[string]string, error) {
