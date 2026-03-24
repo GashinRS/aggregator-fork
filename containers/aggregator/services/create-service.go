@@ -399,7 +399,7 @@ func createIngressRoute(service *model.Service, owner model.User, ctx context.Co
 				"namespace": namespace,
 			},
 			"spec": map[string]interface{}{
-				"entryPoints": []string{"web"},
+				"entryPoints": []string{"web", "websecure"},
 				"routes": []interface{}{
 					map[string]interface{}{
 						"match": "Host(`" + hostMatch + "`) && " + servicePrefixRule(servicePathPrefixes) + " && Method(`OPTIONS`)",

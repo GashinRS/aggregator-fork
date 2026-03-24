@@ -169,9 +169,31 @@ func main() {
 	})
 
 	// Start HTTP server
+	handler := http.Handler(serverMux)
+	if basePath := strings.TrimSuffix(model.ExternalBasePath, "/"); basePath != "" {
+		// Accept requests both with and without the configured external base path.
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			if path == basePath || strings.HasPrefix(path, basePath+"/") {
+				rewrittenPath := strings.TrimPrefix(path, basePath)
+				if rewrittenPath == "" {
+					rewrittenPath = "/"
+				}
+				clone := r.Clone(r.Context())
+				urlCopy := *r.URL
+				urlCopy.Path = rewrittenPath
+				urlCopy.RawPath = ""
+				clone.URL = &urlCopy
+				serverMux.ServeHTTP(w, clone)
+				return
+			}
+			serverMux.ServeHTTP(w, r)
+		})
+	}
+
 	srv := &http.Server{
 		Addr:    ":5000",
-		Handler: serverMux,
+		Handler: handler,
 	}
 
 	go func() {

@@ -315,7 +315,7 @@ func deployAggregatorResources(namespace string, tokenEndpoint string, accessTok
 				"namespace": namespace,
 			},
 			"spec": map[string]interface{}{
-				"entryPoints": []string{"web"},
+				"entryPoints": []string{"web", "websecure"},
 				"routes": []interface{}{
 					map[string]interface{}{
 						"match": "Host(`" + hostMatch + "`) && " + exactPathRule(configBasePaths) + " && Method(`OPTIONS`)",
