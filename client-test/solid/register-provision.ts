@@ -2,7 +2,7 @@ import { fetch } from "cross-fetch";
 import { randomUUID } from "crypto";
 import {SolidOIDCAuth} from "../util.js";
 
-const AGGREGATOR_URL = "http://aggregator.local:5000";
+const AGGREGATOR_URL = "http://aggregator.local:5000/aggregator/";
 
 const QUERY_SOURCES = ["http://rs.local:3000/bob/favorites", "http://rs.local:3000/alice/favorites"];
 const QUERY_STRING = "SELECT ?favorite WHERE { ?s schema:name ?favorite }";

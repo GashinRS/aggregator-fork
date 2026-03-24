@@ -24,18 +24,28 @@ type UmaClaims struct {
 }
 
 var ExternalHost string
+var ExternalScheme string
 var DisableAuth bool
 
-func InitAuth(extHost string, disbaleAuth bool) {
+func InitAuth(extScheme string, extHost string, disbaleAuth bool) {
+	if strings.TrimSpace(extScheme) == "" {
+		extScheme = "http"
+	}
+	ExternalScheme = strings.ToLower(strings.TrimSpace(extScheme))
 	ExternalHost = extHost
 	DisableAuth = disbaleAuth
 }
 
 func HandleAuthorizationRequest(w http.ResponseWriter, r *http.Request) {
 	// Extract the UMA information from the forwarded headers
-	scheme := strings.Trim(r.Header.Get("X-Forwarded-Proto"), "[]")
 	resourcePath := strings.Trim(r.Header.Get("X-Forwarded-Uri"), "[]")
-	resourceId := fmt.Sprintf("%s://%s%s", scheme, ExternalHost, resourcePath)
+	if resourcePath == "" {
+		resourcePath = "/"
+	}
+	if !strings.HasPrefix(resourcePath, "/") {
+		resourcePath = "/" + resourcePath
+	}
+	resourceId := fmt.Sprintf("%s://%s%s", ExternalScheme, ExternalHost, resourcePath)
 	umaId := idIndex[resourceId]
 	if umaId == "" {
 		logrus.WithFields(logrus.Fields{"resource": resourceId}).Warn("No UMA id found for resource")

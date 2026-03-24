@@ -17,8 +17,8 @@ type derivedSource struct {
 }
 
 type derivedResourceRequest struct {
-	Location          string         `json:"location"`
-	Sources           []derivedSource `json:"sources"`
+	Location string          `json:"location"`
+	Sources  []derivedSource `json:"sources"`
 }
 
 func HandleDerivedResourceRequest(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +102,11 @@ func resolveExternalResourceID(location string) string {
 	if !strings.HasPrefix(trimmed, "/") {
 		trimmed = "/" + trimmed
 	}
-	return fmt.Sprintf("http://%s%s", ExternalHost, trimmed)
+	scheme := strings.TrimSpace(ExternalScheme)
+	if scheme == "" {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, ExternalHost, trimmed)
 }
 
 func derivedResourceIDs(location string) []string {

@@ -179,6 +179,16 @@ spec:
 # 6 Ingress
 # ========================
 apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-aggregator-prefix
+  namespace: aggregator-app
+spec:
+  stripPrefix:
+    prefixes:
+      - /aggregator
+---
+apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: aggregator-server-ingressroute
@@ -186,11 +196,22 @@ metadata:
 spec:
   entryPoints:
     - web
+    - websecure
   routes:
     - match: Host(`aggregator.local`) && PathPrefix(`/`)
       kind: Rule
       middlewares:
         - name: cors
+          namespace: aggregator-app
+      services:
+        - name: aggregator-server-svc
+          port: 5000
+    - match: Host(`solid4media.ilabt.imec.be`) && PathPrefix(`/aggregator`)
+      kind: Rule
+      middlewares:
+        - name: cors
+          namespace: aggregator-app
+        - name: strip-aggregator-prefix
           namespace: aggregator-app
       services:
         - name: aggregator-server-svc
@@ -204,6 +225,7 @@ metadata:
 spec:
   entryPoints:
     - web
+    - websecure
   routes:
     - match: Host(`aggregator.local`) && PathPrefix(`/registration`)
       kind: Rule

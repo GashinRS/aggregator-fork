@@ -1,8 +1,8 @@
 package main
 
 import (
-	"net/url"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -32,11 +32,11 @@ func main() {
 	if rawExternalHost == "" {
 		logrus.Fatal("EXTERNAL_HOST must be set")
 	}
-	externalHost := parseExternalHost(rawExternalHost)
+	externalScheme, externalHost := parseExternalHost(rawExternalHost)
 
 	mux := http.NewServeMux()
 	signing.InitSigning(mux, "/keys/private_key.pem", externalHost)
-	auth.InitAuth(externalHost, DisableAuth)
+	auth.InitAuth(externalScheme, externalHost, DisableAuth)
 
 	// Synchronize resources (NOT SUPPORTED YET)
 	// err := auth.SynchronizeResources(ASURL)
@@ -81,10 +81,14 @@ func main() {
 	logrus.Info("Exiting container after resource cleanup")
 }
 
-func parseExternalHost(raw string) string {
+func parseExternalHost(raw string) (string, string) {
 	parsed, err := url.Parse(raw)
 	if err == nil && parsed.Host != "" {
-		return parsed.Host
+		scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+		if scheme == "" {
+			scheme = "http"
+		}
+		return scheme, parsed.Host
 	}
-	return raw
+	return "http", raw
 }

@@ -6,9 +6,12 @@ import (
 
 func TestDerivedResourceIDs_ServiceLocation(t *testing.T) {
 	originalHost := ExternalHost
+	originalScheme := ExternalScheme
 	ExternalHost = "aggregator.local:5000"
+	ExternalScheme = "http"
 	t.Cleanup(func() {
 		ExternalHost = originalHost
+		ExternalScheme = originalScheme
 	})
 
 	ids := derivedResourceIDs("/services/ns-123/svc-456")
