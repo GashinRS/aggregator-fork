@@ -1,7 +1,12 @@
 package auth
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 )
 
 func TestDerivedResourceIDs_ServiceLocation(t *testing.T) {
@@ -49,6 +54,61 @@ func TestDeriveOwnerWebID(t *testing.T) {
 		if got := deriveOwnerWebID(test.input); got != test.expected {
 			t.Fatalf("expected %q for %q, got %q", test.expected, test.input, got)
 		}
+	}
+}
+
+func TestDeriveOwnerWebID_ProbeNestedCandidatePaths(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/css1/alice/profile/card" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`
+@prefix solid: <http://www.w3.org/ns/solid/terms#> .
+<> solid:oidcIssuer <https://idp.example> .
+`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	sourceURL := server.URL + "/css1/alice/private/data/text.txt"
+	expected := server.URL + "/css1/alice/profile/card#me"
+
+	if got := deriveOwnerWebID(sourceURL); got != expected {
+		t.Fatalf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestCandidateOwnerWebIDs_FilePath(t *testing.T) {
+	parsed, err := url.Parse("http://example.org/css1/alice/private/data/text.txt")
+	if err != nil {
+		t.Fatalf("failed to parse URL: %v", err)
+	}
+
+	got := candidateOwnerWebIDs(parsed)
+	expected := []string{
+		"http://example.org/profile/card#me",
+		"http://example.org/css1/profile/card#me",
+		"http://example.org/css1/alice/profile/card#me",
+		"http://example.org/css1/alice/private/profile/card#me",
+		"http://example.org/css1/alice/private/data/profile/card#me",
+	}
+
+	assertStringSetEqual(t, got, expected)
+}
+
+func TestProbeProfileCard_RequiresOIDCIssuerPredicate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("@prefix foaf: <http://xmlns.com/foaf/0.1/> ."))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if probeProfileCard(ctx, server.URL+"/profile/card#me") {
+		t.Fatal("expected probe to fail when solid:oidcIssuer is missing")
 	}
 }
 

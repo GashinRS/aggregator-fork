@@ -1,12 +1,16 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -20,6 +24,10 @@ type derivedResourceRequest struct {
 	Location string          `json:"location"`
 	Sources  []derivedSource `json:"sources"`
 }
+
+var profileProbeClient = &http.Client{Timeout: 2 * time.Second}
+
+const solidOIDCIssuerIRI = "http://www.w3.org/ns/solid/terms#oidcIssuer"
 
 func HandleDerivedResourceRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -179,6 +187,12 @@ func deriveOwnerWebID(sourceURL string) string {
 		return ""
 	}
 
+	candidates := candidateOwnerWebIDs(parsed)
+	if resolved := resolveOwnerFromCandidates(candidates); resolved != "" {
+		return resolved
+	}
+
+	// Fallback heuristic when remote probing is unavailable.
 	if strings.Contains(parsed.Path, "/profile/card") {
 		base := strings.TrimSuffix(parsed.Path, "#me")
 		if !strings.HasSuffix(base, "/card") && !strings.HasSuffix(base, "/profile/card") {
@@ -193,4 +207,118 @@ func deriveOwnerWebID(sourceURL string) string {
 	}
 
 	return fmt.Sprintf("%s://%s/%s/profile/card#me", parsed.Scheme, parsed.Host, segments[0])
+}
+
+func candidateOwnerWebIDs(parsed *url.URL) []string {
+	base := fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+	candidates := []string{
+		base + "/profile/card#me",
+	}
+
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) == 1 && segments[0] == "" {
+		return uniqueStringList(candidates)
+	}
+
+	// Treat the last segment as a file path component when it looks file-like.
+	if !strings.HasSuffix(parsed.Path, "/") && len(segments) > 0 && strings.Contains(segments[len(segments)-1], ".") {
+		segments = segments[:len(segments)-1]
+	}
+
+	for i := 1; i <= len(segments); i++ {
+		prefix := strings.Join(segments[:i], "/")
+		candidates = append(candidates, fmt.Sprintf("%s/%s/profile/card#me", base, prefix))
+	}
+
+	return uniqueStringList(candidates)
+}
+
+func resolveOwnerFromCandidates(candidates []string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	type probeResult struct {
+		index int
+		ok    bool
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	results := make(chan probeResult, len(candidates))
+	var wg sync.WaitGroup
+	for i, candidate := range candidates {
+		wg.Add(1)
+		go func(idx int, webID string) {
+			defer wg.Done()
+			results <- probeResult{index: idx, ok: probeProfileCard(ctx, webID)}
+		}(i, candidate)
+	}
+
+	wg.Wait()
+	close(results)
+
+	// Prefer the most specific successful candidate (highest index).
+	bestIndex := -1
+	for result := range results {
+		if result.ok && result.index > bestIndex {
+			bestIndex = result.index
+		}
+	}
+	if bestIndex < 0 {
+		return ""
+	}
+	return candidates[bestIndex]
+}
+
+func probeProfileCard(ctx context.Context, webID string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(webID))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	parsed.Fragment = ""
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Accept", "text/turtle,application/ld+json,application/json,*/*")
+
+	resp, err := profileProbeClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return false
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	return hasOIDCIssuerPredicate(body)
+}
+
+func hasOIDCIssuerPredicate(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	payload := strings.ToLower(string(body))
+	return strings.Contains(payload, strings.ToLower(solidOIDCIssuerIRI)) ||
+		strings.Contains(payload, "solid:oidcissuer")
+}
+
+func uniqueStringList(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
