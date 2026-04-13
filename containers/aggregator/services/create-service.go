@@ -149,7 +149,15 @@ func createService(service *model.Service, ports []int32, ctx context.Context) e
 	// Specify Service
 	svcSpec := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: service.NamespaceID,
+			Name:      service.NamespaceID,
+			Namespace: model.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":              "aggregator-service",
+				"app.kubernetes.io/part-of":           "aggregator-platform",
+				"app.kubernetes.io/managed-by":        "aggregator-instance",
+				"agg.knows.idlab.ugent.be/managed-by": model.ID,
+				"agg.knows.idlab.ugent.be/id":         service.InstanceID,
+			},
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,

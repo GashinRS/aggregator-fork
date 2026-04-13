@@ -208,7 +208,7 @@ func main() {
 	loggingMux := loggingMiddleware(serverMux)
 	srv := &http.Server{
 		Addr:    ":5000",
-		Handler: loggingMux,
+		Handler: corsMiddleware(loggingMux),
 	}
 
 	go func() {
@@ -399,6 +399,29 @@ func loggingMiddleware(next http.Handler) http.Handler {
 				"agent":  agent,
 			}).Debug("Incoming request")
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Handle preflight OPTIONS requests
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		// Add CORS headers to all responses
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+		w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate")
+
 		next.ServeHTTP(w, r)
 	})
 }
