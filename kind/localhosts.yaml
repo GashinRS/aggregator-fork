@@ -12,7 +12,8 @@ data:
         }
         ready
         hosts {
-          172.22.254.95 wsl.local
+          172.21.51.227 wsl.local
+          172.21.51.227 aggregator.wsl.local
           172.22.254.95 test.local
           fallthrough
         }
