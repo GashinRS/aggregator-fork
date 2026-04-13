@@ -12,7 +12,7 @@ const SVC = "/services";
 
 // Transformation configuration
 const SVC_NAME = "kvasir-query-svc";
-const TF_ID = "KvasirQuery";
+const TF_ID = "IncrementalKvasir";
 const PARAMS = {
   query: `
   PREFIX ex: <http://example.org/>
