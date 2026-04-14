@@ -8,9 +8,13 @@ const IDP = "http://localhost:8280";
 const REALM = "quarkus";
 const CLIENT_ID = "demo-client";
 const CLIENT_UMA_ID = `http://example.com/id/${CLIENT_ID}`;
-const CLIENT_SECRET = "oI6T6JNZR8ezbnWJafRIQtQrNIXCBqOh";
+const CLIENT_SECRET = "BtAllQkmYBKNWsImCv5jDLvyh6hjKE2y";
 
-const USER_ID = "caf4f290-3646-4c5f-8d77-2509453e3732";
+// const CLIENT_ID = "aggregator-server";
+// const CLIENT_UMA_ID = `http://example.com/id/${CLIENT_ID}`;
+// const CLIENT_SECRET = "JmGRqEgyf46J69qlro2rc5xJxfSQgygi";
+
+const USER_ID = "646aef72-b442-42c6-8316-314d2ec94bb9";
 const USER_UMA_ID = `http://example.com/id/${USER_ID}`;
 const USERNAME = "alice";
 const PASSWORD = "alice";

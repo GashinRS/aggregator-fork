@@ -6,13 +6,13 @@ const df = new DataFactory();
 
 // Aggregator configuration
 const AGGREGATOR_SERVER = "https://aggregator.local:5443";
-const AGGREGATOR = "https://aggregator.local:5443/54337f85-02a7-4e04-8f29-a7d46c63ce03";
+const AGGREGATOR = "https://aggregator.local:5443/cdbb9953-a32f-4042-b571-e43cbfb8c0ca";
 const TF = "/transformations";
 const SVC = "/services";
 
 // Transformation configuration
-const SVC_NAME = "kvasir-query-svc";
-const TF_ID = "IncrementalKvasir";
+const SVC_NAME = "test1";
+const TF_ID = "KvasirQuery";
 const PARAMS = {
   query: `
   PREFIX ex: <http://example.org/>
@@ -73,7 +73,7 @@ const PARAMS = {
 const USERNAME = "alice";
 const PASSWORD = "alice";
 const CLIENT_ID = "demo-client";
-const CLIENT_SECRET = "oI6T6JNZR8ezbnWJafRIQtQrNIXCBqOh";
+const CLIENT_SECRET = "BtAllQkmYBKNWsImCv5jDLvyh6hjKE2y";
 const IDP = "http://localhost:8280";
 const REALM = "quarkus";
 

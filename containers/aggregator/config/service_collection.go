@@ -19,6 +19,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// SourceUpdateRequest represents the JSON body for PATCH /services/{id}
+type SourceUpdateRequest struct {
+	// Mode: "overwrite" (replace all), "add" (append new), "remove" (delete listed)
+	Mode    string   `json:"mode"`
+	Sources []string `json:"sources"`
+}
+
 type ServiceCollection struct {
 	etagServices        int
 	etagTransformations int
@@ -121,6 +128,8 @@ func (collec *ServiceCollection) HandleServiceEndpoint(w http.ResponseWriter, r 
 		collec.headService(w, r, *service)
 	case "GET":
 		collec.getService(w, r, *service)
+	case "PATCH":
+		collec.patchService(w, r, service)
 	case "DELETE":
 		collec.deleteService(w, r, *service)
 	default:
@@ -236,9 +245,18 @@ func (collec *ServiceCollection) postService(w http.ResponseWriter, r *http.Requ
 	collec.servicesMu.Unlock()
 
 	// Create service endpoint
-	err = collec.HandleFunc(servicePath, collec.HandleServiceEndpoint, []model.Scope{model.Read, model.Delete})
+	err = collec.HandleFunc(servicePath, collec.HandleServiceEndpoint, []model.Scope{model.Read, model.Write, model.Delete})
 	if err != nil {
 		logrus.WithError(err).Errorf("Error registering handler for service %s", serviceId)
+		http.Error(w, "Failed to create service from request", http.StatusInternalServerError)
+		return
+	}
+
+	// Create sources endpoint for inspecting / updating sources
+	sourcesPath := servicePath + "/sources"
+	err = collec.HandleFunc(sourcesPath, collec.HandleServiceSources, []model.Scope{model.Read, model.Write})
+	if err != nil {
+		logrus.WithError(err).Errorf("Error registering sources handler for service %s", serviceId)
 		http.Error(w, "Failed to create service from request", http.StatusInternalServerError)
 		return
 	}
@@ -275,6 +293,68 @@ func (collec *ServiceCollection) postService(w http.ResponseWriter, r *http.Requ
 	}
 }
 
+// patchService PATCH /<service path> updates the sources of a running service
+func (collec *ServiceCollection) patchService(w http.ResponseWriter, r *http.Request, service *model.Service) {
+	logrus.WithFields(logrus.Fields{"service_id": service.InstanceID}).Info("Request PATCH for service")
+
+	// Parse the request body
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		return
+	}
+
+	var req SourceUpdateRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Sources) == 0 {
+		http.Error(w, "Sources list must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	// Validate mode
+	mode := services.SourceUpdateMode(req.Mode)
+	switch mode {
+	case services.SourceModeOverwrite, services.SourceModeAdd, services.SourceModeRemove:
+		// valid
+	default:
+		http.Error(w, `Invalid mode. Must be "overwrite", "add", or "remove"`, http.StatusBadRequest)
+		return
+	}
+
+	// Update sources
+	collec.servicesMu.Lock()
+	err = services.UpdateServiceSources(service, req.Sources, mode)
+	collec.servicesMu.Unlock()
+
+	if err != nil {
+		logrus.WithError(err).Error("Failed to update service sources")
+		http.Error(w, fmt.Sprintf("Failed to update sources: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	collec.etagServices++
+
+	// Return the updated service representation
+	repr, err := service.FnORepresentation()
+	if err != nil {
+		logrus.WithError(err).Error("Failed to generate service FnO representation after update")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/turtle")
+	w.Header().Set("ETag", generateServiceETag(repr))
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(repr)
+	if err != nil {
+		logrus.WithError(err).Error("Error writing updated service response body")
+	}
+}
+
 // DELETE config deletes a service with the given ID
 func (collec *ServiceCollection) deleteService(w http.ResponseWriter, _ *http.Request, service model.Service) {
 	logrus.WithFields(logrus.Fields{"service_id": service.InstanceID}).Info("Request to delete service")
@@ -284,6 +364,68 @@ func (collec *ServiceCollection) deleteService(w http.ResponseWriter, _ *http.Re
 
 	collec.etagServices++
 	w.WriteHeader(http.StatusOK)
+}
+
+// HandleServiceSources handles GET and PATCH requests to /<service path>/sources
+// GET  → returns the current SOURCES list as JSON
+// PATCH → same as patchService but routed through the /sources sub-path
+func (collec *ServiceCollection) HandleServiceSources(w http.ResponseWriter, r *http.Request) {
+	// Derive service ID: strip trailing "/sources" and join path segments
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 2 {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	// Drop the last segment ("sources") to get the service path segments
+	serviceID := strings.Join(parts[:len(parts)-1], "-")
+
+	collec.servicesMu.RLock()
+	service, ok := collec.services[serviceID]
+	collec.servicesMu.RUnlock()
+	if !ok {
+		http.Error(w, "Service not found", http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		// Find the sources parameter
+		sourcesStr := ""
+		for paramKey := range service.Exe.Params {
+			pred, err := services.StripPrefix(paramKey, model.ExternalServerURL()+model.TransformationCatalog+"#")
+			if err != nil {
+				continue
+			}
+			envKey, exists := service.Exe.Transformation.InputMapping[pred]
+			if exists && envKey == "SOURCES" {
+				sourcesStr = strings.Trim(service.Exe.Params[paramKey].GetValue(), "<>")
+				break
+			}
+		}
+
+		if sourcesStr == "" {
+			http.Error(w, "Service does not have a SOURCES parameter", http.StatusNotFound)
+			return
+		}
+
+		sourceList := strings.Split(sourcesStr, ",")
+		// Trim whitespace from each entry
+		for i, s := range sourceList {
+			sourceList[i] = strings.TrimSpace(s)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string][]string{"sources": sourceList}); err != nil {
+			logrus.WithError(err).Error("Failed to encode sources response")
+		}
+
+	case "PATCH":
+		// Delegate to the shared patch logic
+		collec.patchService(w, r, service)
+
+	default:
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+	}
 }
 
 // Handles all incoming service requests <service path>/<output>

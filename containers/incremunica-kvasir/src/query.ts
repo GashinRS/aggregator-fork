@@ -131,6 +131,20 @@ export function materializedViewToSparqlJson(view: Map<string,{bindings: any, co
   };
 }
 
+// Retry configuration for UMA permission errors
+const RETRY_MAX_ATTEMPTS = parseInt(process.env.UMA_RETRY_MAX_ATTEMPTS || "10", 10);
+const RETRY_INITIAL_DELAY_MS = parseInt(process.env.UMA_RETRY_INITIAL_DELAY_MS || "1000", 10);
+const RETRY_MAX_DELAY_MS = parseInt(process.env.UMA_RETRY_MAX_DELAY_MS || "30000", 10);
+const RETRY_BACKOFF_FACTOR = parseFloat(process.env.UMA_RETRY_BACKOFF_FACTOR || "2");
+
+function isRetryableStatus(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function umaProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   let target = input.toString();
   const originalUrl = target;
@@ -189,22 +203,41 @@ async function umaProxyFetch(input: RequestInfo | URL, init?: RequestInit): Prom
 
   console.log("[FETCH] Proxy request payload prepared");
 
-  const response = await fetch(target, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(fetchRequest)
-  });
+  // Retry loop with exponential backoff for UMA permission errors
+  let attempt = 0;
+  let delay = RETRY_INITIAL_DELAY_MS;
 
-  console.log(`[FETCH] Proxy response received (status: ${response.status})`);
+  while (true) {
+    const response = await fetch(target, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(fetchRequest)
+    });
 
-  Object.defineProperty(response, 'url', {
-    value: originalUrl,
-    writable: false,
-    enumerable: true,
-    configurable: false
-  });
+    console.log(`[FETCH] Proxy response received (status: ${response.status}, attempt: ${attempt + 1}/${RETRY_MAX_ATTEMPTS})`);
 
-  return response;
+    if (!isRetryableStatus(response.status) || attempt >= RETRY_MAX_ATTEMPTS - 1) {
+      if (isRetryableStatus(response.status)) {
+        console.warn(`[FETCH] Giving up after ${attempt + 1} attempts for ${originalUrl} (status: ${response.status})`);
+      }
+
+      Object.defineProperty(response, 'url', {
+        value: originalUrl,
+        writable: false,
+        enumerable: true,
+        configurable: false
+      });
+
+      return response;
+    }
+
+    // Retryable error — wait and try again
+    console.log(`[FETCH] Permission not yet granted for ${originalUrl}, retrying in ${delay}ms (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS})`);
+    await sleep(delay);
+
+    attempt++;
+    delay = Math.min(delay * RETRY_BACKOFF_FACTOR, RETRY_MAX_DELAY_MS);
+  }
 }

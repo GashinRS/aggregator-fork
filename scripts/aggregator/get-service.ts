@@ -4,13 +4,13 @@ import { KeycloakOIDCAuth } from "../util.js";
 const USERNAME = "alice";
 const PASSWORD = "alice";
 const CLIENT_ID = "demo-client";
-const CLIENT_SECRET = "oI6T6JNZR8ezbnWJafRIQtQrNIXCBqOh";
+const CLIENT_SECRET = "BtAllQkmYBKNWsImCv5jDLvyh6hjKE2y";
 const IDP = "http://localhost:8280";
 const REALM = "quarkus";
 
 // Aggregator configuration
-const AGGREGATOR = "https://aggregator.local:5443/54337f85-02a7-4e04-8f29-a7d46c63ce03"
-const SERVICE_ENDPOINT = `${AGGREGATOR}/kvasir-query-svc`;
+const AGGREGATOR = "https://aggregator.local:5443/cdbb9953-a32f-4042-b571-e43cbfb8c0ca"
+const SERVICE_ENDPOINT = `${AGGREGATOR}/test1`;
 const OUTPUT_ENDPOINT = `${SERVICE_ENDPOINT}/result`;
 
 async function main() {
