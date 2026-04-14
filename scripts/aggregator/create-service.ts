@@ -6,7 +6,7 @@ const df = new DataFactory();
 
 // Aggregator configuration
 const AGGREGATOR_SERVER = "https://aggregator.local:5443";
-const AGGREGATOR = "https://aggregator.local:5443/cdbb9953-a32f-4042-b571-e43cbfb8c0ca";
+const AGGREGATOR = "https://aggregator.local:5443/a90cceb2-5617-4d17-9136-747ac4f58c9a";
 const TF = "/transformations";
 const SVC = "/services";
 
