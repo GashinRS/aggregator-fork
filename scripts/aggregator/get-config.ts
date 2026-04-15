@@ -1,43 +1,31 @@
 import { KeycloakOIDCAuth } from "../util.js";
+import { config, aggregatorUrl } from "../config.js";
 
-// Authz configuration
-const USERNAME = "alice";
-const PASSWORD = "alice";
-const CLIENT_ID = "demo-client";
-const CLIENT_SECRET = "SsIyMNGjbKrbcJPHr8gWwc36DdqMGvvd";
-const IDP = "http://localhost:8280";
-const REALM = "quarkus";
-
-// Aggregator
-const AGGREGATOR = "https://aggregator.local:5443/419d851a-a6ab-4273-815d-0e59b6b44db4";
-const PATH = "/transformations"; // "", "/services", "/transformations"
+// Change PATH to query a different endpoint:
+//   ""               → aggregator root
+//   "/services"      → registered services
+//   "/transformations" → available transformations
+const PATH = "/transformations";
 
 async function main() {
   console.log("=== Initializing Keycloak Authentication ===");
 
   const auth = new KeycloakOIDCAuth();
-  await auth.init(IDP, REALM);
-  await auth.login(USERNAME, PASSWORD, CLIENT_ID, CLIENT_SECRET);
+  await auth.init(config.idp, config.realm);
+  await auth.login(config.alice.username, config.alice.password, config.clientId, config.clientSecret);
 
-  
-  console.log("🔐 Auth initialized successfully.");
+  console.log("Auth initialized successfully.");
   const umaFetch = auth.createUMAFetch();
 
-  console.log("\n=== Fetching configuration ===");
-  const endpoint = AGGREGATOR + PATH;
-  console.log(`➡️  Endpoint: ${endpoint}\n`);
+  const endpoint = aggregatorUrl + PATH;
+  console.log(`\n=== Fetching ${endpoint} ===`);
 
   try {
     const response = await umaFetch(endpoint, { method: "GET" });
-
-    console.log(`📡 Response status: ${response.status}`);
-    console.log("📄 Response body:\n");
-
-    const bodyText = await response.text();
-    console.log(bodyText || "(empty response)");
+    console.log(`Response status: ${response.status}`);
+    console.log(await response.text() || "(empty response)");
   } catch (err: any) {
-    console.error("\n❌ Failed to fetch available transformations:");
-    console.error(err?.message || err);
+    console.error("Failed:", err?.message || err);
   }
 
   console.log("\n=== Done ===");

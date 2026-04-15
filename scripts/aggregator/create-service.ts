@@ -1,102 +1,48 @@
 import { KeycloakOIDCAuth } from "../util.js";
 import { DataFactory } from "rdf-data-factory";
 import { Writer } from "n3";
+import { config, aggregatorUrl } from "../config.js";
 
 const df = new DataFactory();
 
-// Aggregator configuration
-const AGGREGATOR_SERVER = "https://aggregator.local:5443";
-const AGGREGATOR = "https://aggregator.local:5443/9a971852-374b-47e1-8162-0d11c68aff73";
+const AGGREGATOR_SERVER = config.aggregatorServer;
+const AGGREGATOR = aggregatorUrl;
 const TF = "/transformations";
 const SVC = "/services";
 
-// Transformation configuration
-const SVC_NAME = "test1";
+// ── Script-specific settings ─────────────────────────────────────────────────
+// Change these without touching config.json (they vary per invocation).
+const SVC_NAME = config.svcName;
 const TF_ID = "KvasirQuery";
 const PARAMS = {
-  query: `
-  PREFIX ex: <http://example.org/>
-  SELECT ?pat ?value ?unit ?timestamp 
-  WHERE {
-    ?pat ex:hasObservation ?obs .
-    ?obs ex:value ?value ;
-        ex:unit ?unit ;
-        ex:timestamp ?timestamp .
-  }`,
-  sources: "http://localhost:8080/alice/slices/AggregatorDemoSlice/query,http://localhost:8080/bob/slices/AggregatorDemoSlice/query",
-  schema: `
-  type Query {
-    observations: [ex_Observation]!
-    observation(id: ID!): ex_Observation
-  }
-
-  type ex_Patient {
-    id: ID!
-  }
-
-  type ex_Observation {
-    id: ID!
-    ex_value: Int!
-    ex_unit: String!
-    ex_timestamp: DateTime!
-    forPatient: ex_Patient! @predicate(iri: "ex:hasObservation", reverse: true)
-  }
-
-  type Subscription {
-    observationAdded: ex_Observation!
-  }
-
-  type Mutation {
-    add(obs: PatientObservationInput!): ID!
-  }
-
-  input ObservationInput @class(iri: "ex:Observation") {
-    id: ID!
-    ex_value: Int!
-    ex_unit: String!
-    ex_timestamp: DateTime!
-  }
-
-  input PatientObservationInput @class(iri: "ex:Patient") {
-    id: ID!
-    ex_hasObservation: ObservationInput!
-  }
-  `,
-  context: JSON.stringify({
-    kss: "https://kvasir.discover.ilabt.imec.be/vocab#",
-    schema: "http://schema.org/",
-    ex: "http://example.org/",
-  })
+  query: config.sparqlQuery,
+  sources: [
+    `${config.kvasirServer}/alice/slices/AggregatorDemoSlice/query`,
+    `${config.kvasirServer}/bob/slices/AggregatorDemoSlice/query`,
+  ].join(","),
+  schema: config.schema,
+  context: JSON.stringify(config.context),
 };
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Authz configuration
-const USERNAME = "alice";
-const PASSWORD = "alice";
-const CLIENT_ID = "demo-client";
-const CLIENT_SECRET = "BtAllQkmYBKNWsImCv5jDLvyh6hjKE2y";
-const IDP = "http://localhost:8280";
-const REALM = "quarkus";
-
-const auth = new KeycloakOIDCAuth()
-await auth.init(IDP, REALM)
-await auth.login(USERNAME, PASSWORD, CLIENT_ID, CLIENT_SECRET);
+const auth = new KeycloakOIDCAuth();
+await auth.init(config.idp, config.realm);
+await auth.login(config.alice.username, config.alice.password, config.clientId, config.clientSecret);
 const umaFetch = auth.createUMAFetch();
 
 async function createService() {
     console.log(`=== Parsing service request ===`);
 
     const desc = await parseServiceRequest(SVC_NAME, TF_ID, PARAMS);
-    console.log(desc)
+    console.log(desc);
 
     console.log(`=== Creating service at ${AGGREGATOR}${SVC} ===`);
 
-    const serviceRequest = {
+    const response = await umaFetch(AGGREGATOR + SVC, {
         method: "POST",
         headers: { "content-type": "text/turtle" },
-        body: desc
-    };
-
-    const response = await umaFetch(AGGREGATOR+SVC, serviceRequest);
+        body: desc,
+    });
     console.log(`=== Response status: ${response.status} ===`);
 
     if (response.status !== 202 && response.status !== 201) {
@@ -104,12 +50,7 @@ async function createService() {
     }
 
     console.log(`=== Service accepted ===`);
-    const service = await response.text();
-    console.log(service);
-}
-
-async function main() {
-    await createService();
+    console.log(await response.text());
 }
 
 async function parseServiceRequest(
@@ -117,33 +58,27 @@ async function parseServiceRequest(
   id: string,
   params: Record<string, string>
 ): Promise<string> {
-
   const writer = new Writer({
     prefixes: {
       trans: `${AGGREGATOR_SERVER}${TF}#`,
       fno: "https://w3id.org/function/ontology#",
       rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
       xsd: "http://www.w3.org/2001/XMLSchema#",
-    }
+    },
   });
 
   const execution = df.namedNode(`${AGGREGATOR}/${name}`);
 
-  // rdf:type fno:Execution
   writer.addQuad(
     execution,
     df.namedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
     df.namedNode("https://w3id.org/function/ontology#Execution")
   );
-
-  // fno:executes trans:$id
   writer.addQuad(
     execution,
     df.namedNode("https://w3id.org/function/ontology#executes"),
     df.namedNode(`${AGGREGATOR_SERVER}${TF}#${id}`)
   );
-
-  // parameters
   for (const [key, value] of Object.entries(params)) {
     writer.addQuad(
       execution,
@@ -152,13 +87,9 @@ async function parseServiceRequest(
     );
   }
 
-  // Return Turtle string
   return new Promise((resolve, reject) => {
-    writer.end((error, result) => {
-      if (error) reject(error);
-      else resolve(result);
-    });
+    writer.end((error, result) => (error ? reject(error) : resolve(result)));
   });
 }
 
-main().catch(console.error);
+await createService().catch(console.error);
