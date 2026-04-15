@@ -6,7 +6,7 @@ import { dirname, join } from "path";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // __dirname is scripts/dist/ when compiled; go up one level to reach scripts/config.json
-const configPath = join(__dirname, "..", "config.json");
+const configPath = join(__dirname, "..", "scripts/config.json");
 
 interface UserConfig {
   username: string;
