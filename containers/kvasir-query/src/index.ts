@@ -35,15 +35,15 @@ async function main() {
   }
 
   // How long to collect results per query cycle before snapshotting (default: 60s).
-  // Set lower for faster first results, higher to capture data from slow sources.
-  const COLLECTION_TIMEOUT_MS = parseInt(process.env.COLLECTION_TIMEOUT || "60000", 10);
+  // Comunica ends the stream naturally once all results are emitted, so this is
+  // primarily a safety net for slow or stalling sources.
+  const COLLECTION_TIMEOUT_MS = parseInt(process.env.COLLECTION_TIMEOUT ?? "60000", 10);
 
   // How long to wait between the end of one cycle and the start of the next (default: 30s).
-  const REFRESH_INTERVAL_MS = parseInt(process.env.REFRESH_INTERVAL || "30000", 10);
+  const REFRESH_INTERVAL_MS = parseInt(process.env.REFRESH_INTERVAL ?? "30000", 10);
 
   console.log(`[CONFIG] Collection timeout: ${COLLECTION_TIMEOUT_MS}ms, refresh interval: ${REFRESH_INTERVAL_MS}ms`);
 
-  // Re-bind so TypeScript knows these are definitely strings inside closures
   const queryStr: string = QUERY;
   const schemaStr: string = SCHEMA;
 
@@ -85,13 +85,11 @@ async function main() {
       await mutex.runExclusive(() => { lastQueryError = msg; });
     }
 
-    // Schedule next cycle after the refresh interval
     setTimeout(() => {
       runCycle().catch(err => console.error("[REFRESH] Unhandled error:", err));
     }, REFRESH_INTERVAL_MS);
   }
 
-  // Kick off first cycle immediately (fire-and-forget — server is already up)
   runCycle().catch(err => console.error("[REFRESH] Unhandled error in first cycle:", err));
 }
 
