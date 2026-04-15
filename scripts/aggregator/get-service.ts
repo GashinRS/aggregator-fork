@@ -9,7 +9,7 @@ const IDP = "http://localhost:8280";
 const REALM = "quarkus";
 
 // Aggregator configuration
-const AGGREGATOR = "https://aggregator.local:5443/a90cceb2-5617-4d17-9136-747ac4f58c9a"
+const AGGREGATOR = "https://aggregator.local:5443/9a971852-374b-47e1-8162-0d11c68aff73"
 const SERVICE_ENDPOINT = `${AGGREGATOR}/test1`;
 const OUTPUT_ENDPOINT = `${SERVICE_ENDPOINT}/result`;
 
