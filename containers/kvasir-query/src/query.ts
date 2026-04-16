@@ -1,4 +1,75 @@
-import { QueryEngine } from "@comunica-graphql/query-sparql-graphql";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+
+// The stock `@comunica-graphql/query-sparql-graphql` engine silently returns an
+// empty iterator when a SPARQL query can only be matched through reverse
+// predicate mappings. Kvasir slices rely on those mappings, so we execute the
+// same SPARQL->GraphQL conversion that the working Incremunica path uses, but
+// keep the execution strictly one-shot/non-incremental here.
+type VariableLike = { value: string };
+type DatatypeLike = { value: string };
+type TermLike = {
+  termType: string;
+  value: string;
+  datatype?: DatatypeLike;
+  language?: string;
+};
+type BindingsLike = Iterable<[VariableLike, TermLike]> & {
+  keys(): Iterable<VariableLike>;
+};
+
+interface ResponseMapperLike {
+  dataToBindings(
+    data: unknown,
+    variables: VariableLike[],
+    dataFactory: unknown,
+    bindingsFactory: { bindings(entries?: [VariableLike, TermLike][]): BindingsLike }
+  ): BindingsLike[];
+}
+
+interface QueryMapperLike {
+  query(query: string): [string, ResponseMapperLike][];
+}
+
+interface QueryMapperCtor {
+  new (schema: string, context: Record<string, string>): QueryMapperLike;
+}
+
+interface DataFactoryLike {
+  variable(value: string): VariableLike;
+  namedNode(value: string): DatatypeLike;
+  literal(value: string, datatype?: DatatypeLike): TermLike;
+}
+
+interface DataFactoryCtor {
+  new (): DataFactoryLike;
+}
+
+interface BindingsFactoryCtor {
+  new (dataFactory: DataFactoryLike): {
+    bindings(entries?: [VariableLike, TermLike][]): BindingsLike;
+  };
+}
+
+type TranslateFn = (query: string) => unknown;
+interface SparqlAlgebraUtilLike {
+  inScopeVariables(operation: unknown): VariableLike[];
+}
+
+const { QueryMapper } = require("@comunica-graphql/sparql2graphql-converter") as {
+  QueryMapper: QueryMapperCtor;
+};
+const { DataFactory } = require("rdf-data-factory") as {
+  DataFactory: DataFactoryCtor;
+};
+const { BindingsFactory } = require("@comunica/utils-bindings-factory") as {
+  BindingsFactory: BindingsFactoryCtor;
+};
+const { translate, Util } = require("sparqlalgebrajs") as {
+  translate: TranslateFn;
+  Util: SparqlAlgebraUtilLike;
+};
 
 export interface SparqlJsonResult {
   head: { vars: string[] };
@@ -22,64 +93,38 @@ export async function querySources(
   context: Record<string, string>,
   collectionTimeoutMs: number
 ): Promise<SparqlJsonResult> {
-  console.log("[QUERY] Initializing Comunica QueryEngine...");
-  const engine = new QueryEngine();
+  console.log("[QUERY] Building one-shot GraphQL mappings...");
+  const mapper = new QueryMapper(schema, context);
+  const candidates = mapper.query(query);
+  console.log(`[QUERY] Generated ${candidates.length} GraphQL candidate query/queries`);
 
-  const sources = endpoints.map(endpoint => {
-    console.log(`[QUERY] Adding source: ${endpoint}`);
-    return {
-      type: "graphql" as const,
-      value: endpoint,
-      context: { schema, context }
-    };
-  });
+  if (candidates.length === 0) {
+    console.warn("[QUERY] No executable GraphQL query could be derived from the SPARQL query and schema");
+    return EMPTY_RESULT;
+  }
 
-  console.log("[QUERY] Executing query...");
-  const bindingsStream = await engine.queryBindings(query, {
-    sources: sources as any,
-    fetch: umaProxyFetch
-  });
+  const operation = translate(query);
+  const variables = Util.inScopeVariables(operation);
+  const dataFactory = new DataFactory();
+  const bindingsFactory = new BindingsFactory(dataFactory);
 
-  const bindings: any[] = [];
-  let settled = false;
+  const allBindings: BindingsLike[] = [];
+  for (const endpoint of endpoints) {
+    console.log(`[QUERY] Collecting snapshot from ${endpoint}`);
+    const endpointBindings = await withTimeout(
+      executeAgainstEndpoint(endpoint, candidates, variables, context, dataFactory, bindingsFactory),
+      collectionTimeoutMs,
+      `Timed out collecting results from ${endpoint} after ${collectionTimeoutMs}ms`
+    );
+    console.log(`[QUERY] Collected ${endpointBindings.length} bindings from ${endpoint}`);
+    allBindings.push(...endpointBindings);
+  }
 
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        console.log(`[QUERY] Collection timeout (${collectionTimeoutMs}ms), snapshot has ${bindings.length} results`);
-        try { (bindingsStream as any).destroy(); } catch (_) { /* ignore */ }
-        resolve();
-      }
-    }, collectionTimeoutMs);
-
-    bindingsStream.on("data", (b: any) => {
-      bindings.push(b);
-    });
-
-    bindingsStream.on("end", () => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        console.log(`[QUERY] Stream ended naturally with ${bindings.length} results`);
-        resolve();
-      }
-    });
-
-    bindingsStream.on("error", (err: Error) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        console.error("[QUERY] Stream error:", err.message);
-        resolve();
-      }
-    });
-  });
-
-  return bindingsToSparqlJson(bindings);
+  console.log(`[QUERY] Snapshot contains ${allBindings.length} bindings in total`);
+  return bindingsToSparqlJson(allBindings);
 }
 
-function bindingsToSparqlJson(bindings: any[]): SparqlJsonResult {
+function bindingsToSparqlJson(bindings: BindingsLike[]): SparqlJsonResult {
   const variablesSet = new Set<string>();
   const results: SparqlJsonResult["results"]["bindings"] = [];
 
@@ -109,6 +154,241 @@ function bindingsToSparqlJson(bindings: any[]): SparqlJsonResult {
     head: { vars: [...variablesSet] },
     results: { bindings: results },
   };
+}
+
+async function executeAgainstEndpoint(
+  endpoint: string,
+  candidates: [string, ResponseMapperLike][],
+  variables: VariableLike[],
+  context: Record<string, string>,
+  dataFactory: DataFactoryLike,
+  bindingsFactory: { bindings(entries?: [VariableLike, TermLike][]): BindingsLike }
+): Promise<BindingsLike[]> {
+  const failures: string[] = [];
+
+  for (const [graphqlQuery, responseMapper] of candidates) {
+    try {
+      console.log(`[QUERY] Trying candidate query on ${endpoint}: ${graphqlQuery}`);
+      return await collectBindings(endpoint, graphqlQuery, responseMapper, variables, context, dataFactory, bindingsFactory);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[QUERY] Candidate query failed on ${endpoint}: ${message}`);
+      failures.push(message);
+    }
+  }
+
+  throw new Error(`All GraphQL query candidates failed for ${endpoint}: ${failures.join(" | ")}`);
+}
+
+async function collectBindings(
+  endpoint: string,
+  initialGraphqlQuery: string,
+  responseMapper: ResponseMapperLike,
+  variables: VariableLike[],
+  context: Record<string, string>,
+  dataFactory: DataFactoryLike,
+  bindingsFactory: { bindings(entries?: [VariableLike, TermLike][]): BindingsLike }
+): Promise<BindingsLike[]> {
+  const bindings: BindingsLike[] = [];
+  let currentQuery = initialGraphqlQuery;
+
+  while (true) {
+    const payload = await executeGraphqlQuery(endpoint, currentQuery, context);
+    bindings.push(...responseMapper.dataToBindings(payload.data, variables, dataFactory, bindingsFactory));
+
+    const pagination = getDeepestPagination(payload);
+    if (!pagination) {
+      break;
+    }
+
+    currentQuery = updateQueryCursor(currentQuery, pagination.path, pagination.next);
+  }
+
+  return bindings;
+}
+
+async function executeGraphqlQuery(
+  endpoint: string,
+  graphqlQuery: string,
+  context: Record<string, string>
+): Promise<Record<string, any>> {
+  const body = {
+    "@context": context,
+    query: graphqlQuery,
+  };
+
+  const response = await umaProxyFetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await safeReadText(response);
+    throw new Error(`HTTP ${response.status} ${response.statusText}: ${text}`);
+  }
+
+  const payload = await response.json() as Record<string, any>;
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    throw new Error(JSON.stringify(payload.errors));
+  }
+
+  if (!("data" in payload)) {
+    throw new Error("GraphQL response did not contain a data field");
+  }
+
+  return payload;
+}
+
+async function safeReadText(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch {
+    return "<failed to read response body>";
+  }
+}
+
+function getDeepestPagination(payload: Record<string, any>): { path: string; next: string } | null {
+  const paginations = payload.extensions?.pagination;
+  if (!Array.isArray(paginations)) {
+    return null;
+  }
+
+  const validPaginations = paginations.filter(
+    (pagination: any): pagination is { path: string; next: string } =>
+      typeof pagination?.path === "string" &&
+      typeof pagination?.next === "string" &&
+      pagination.next.length > 0
+  );
+
+  if (validPaginations.length === 0) {
+    return null;
+  }
+
+  return validPaginations.reduce((deepest, current) => {
+    const currentDepth = current.path.split("/").filter(Boolean).length;
+    const deepestDepth = deepest.path.split("/").filter(Boolean).length;
+    return currentDepth > deepestDepth ? current : deepest;
+  });
+}
+
+function updateQueryCursor(query: string, path: string, newCursor: string): string {
+  query = query.trim().slice("query {".length, query.length - 1).trim();
+  const pathParts = path.replace(/^\/+/u, "").split("/");
+
+  function insertCursorAtField(source: string, parts: string[]): string {
+    const field = parts[0];
+    let index = 0;
+    let inString = false;
+
+    while (index < source.length) {
+      const char = source[index];
+      if (char === "\"") {
+        inString = !inString;
+        index++;
+        continue;
+      }
+
+      if (!inString && field && new RegExp(`^\\b${field}\\b`, "u").test(source.slice(index))) {
+        const matchStart = index;
+        const matchEnd = index + field.length;
+        let argsStart = -1;
+        let argsEnd = -1;
+        let bodyStart = -1;
+
+        index = matchEnd;
+        while (/\s/u.test(source[index])) {
+          index++;
+        }
+
+        if (source[index] === "(") {
+          argsStart = index;
+          let parenCount = 1;
+          index++;
+          while (index < source.length && parenCount > 0) {
+            if (source[index] === "(") {
+              parenCount++;
+            } else if (source[index] === ")") {
+              parenCount--;
+            }
+            index++;
+          }
+          argsEnd = index;
+        }
+
+        while (/\s/u.test(source[index])) {
+          index++;
+        }
+
+        if (source[index] === "{") {
+          bodyStart = index;
+        }
+
+        if (parts.length === 1) {
+          let updatedField = "";
+          if (argsStart === -1) {
+            updatedField = `${field}(cursor: "${newCursor}") `;
+          } else {
+            const args = source
+              .slice(argsStart + 1, argsEnd - 1)
+              .split(",")
+              .map(arg => arg.trim())
+              .filter(arg => arg && !arg.startsWith("cursor:"));
+            args.push(`cursor: "${newCursor}"`);
+            updatedField = `${field}(${args.join(", ")})`;
+          }
+
+          return source.slice(0, matchStart) + updatedField + source.slice(index);
+        }
+
+        if (bodyStart !== -1) {
+          let braceCount = 1;
+          let bodyEnd = bodyStart + 1;
+          while (bodyEnd < source.length && braceCount > 0) {
+            if (source[bodyEnd] === "{") {
+              braceCount++;
+            } else if (source[bodyEnd] === "}") {
+              braceCount--;
+            }
+            bodyEnd++;
+          }
+
+          const before = source.slice(0, bodyStart + 1);
+          const body = source.slice(bodyStart + 1, bodyEnd - 1);
+          const after = source.slice(bodyEnd - 1);
+          const newBody = insertCursorAtField(body, parts.slice(1));
+          return before + newBody + after;
+        }
+      }
+
+      index++;
+    }
+
+    throw new Error(`Unable to update query with cursor ${newCursor} at path ${path}`);
+  }
+
+  return `query { ${insertCursorAtField(query, pathParts)} }`;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return promise;
+  }
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 // UMA Proxy Fetch
