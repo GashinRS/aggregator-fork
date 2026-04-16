@@ -24,7 +24,7 @@ const PARAMS = {
         ex:unit ?unit ;
         ex:timestamp ?timestamp .
   }`,
-    sources: "http://localhost:8080/alice/slices/AggregatorDemoSlice/query",
+    sources: "http://localhost:8080/alice/slices/AggregatorDemoSlice/query,http://localhost:8080/bob/slices/AggregatorDemoSlice/query",
     schema: `
   type Query {
     observations: [ex_Observation]!

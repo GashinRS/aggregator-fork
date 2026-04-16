@@ -1,13 +1,3 @@
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-
-// Config is read at runtime so you can edit config.json without recompiling.
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-// __dirname is scripts/dist/ when compiled; go up one level to reach scripts/config.json
-const configPath = join(__dirname, "..", "scripts/config.json");
-
 interface UserConfig {
   username: string;
   password: string;
@@ -45,7 +35,36 @@ export interface Config {
   sparqlQuery: string;
 }
 
-export const config: Config = JSON.parse(readFileSync(configPath, "utf-8"));
+export const config: Config = {
+  aggregatorServer: "https://aggregator.local:5443",
+  aggregatorId: "30c46e35-d08b-45d4-9b10-04d45522001a",
+  kvasirServer: "http://localhost:8080",
+  asServer: "http://localhost:4000/uma",
+  idp: "http://localhost:8280",
+  realm: "quarkus",
+  clientId: "demo-client",
+  clientSecret: "qw82AfD2zfnpt3P98RbEu9KWz4pseFB9",
+  alice: {
+    username: "alice",
+    password: "alice",
+    userId: "329cb5bb-78b7-4c37-9f91-9a275eaad331",
+  },
+  bob: {
+    username: "bob",
+    password: "bob",
+    userId: "1bf44527-b102-47a1-bebb-852807cd99c6",
+  },
+  svcName: "test",
+  context: {
+    kss: "https://kvasir.discover.ilabt.imec.be/vocab#",
+    schema: "http://schema.org/",
+    ex: "http://example.org/",
+  },
+  schema:
+      "type Query {\n  observations: [ex_Observation]\\!\n}\n\ntype ex_Patient {\n  id: ID\\!\n}\n\ntype ex_Observation {\n  id: ID\\!\n  ex_value: Int\\!\n  ex_unit: String\\!\n  ex_timestamp: DateTime\\!\n  forPatient: ex_Patient\\! @predicate(iri: \"ex:hasObservation\", reverse: true)\n}\n\ntype Subscription {\n  observationAdded: ex_Observation\\!\n}\n\ntype Mutation {\n  addObservation(obs: PatientObservationInput\\!): ID\\!\n}\n\ninput ObservationInput @class(iri: \"ex:Observation\") {\n  id: ID\\!\n  ex_value: Int\\!\n  ex_unit: String\\!\n  ex_timestamp: DateTime\\!\n}\n\ninput PatientObservationInput @class(iri: \"ex:Patient\") {\n  id: ID\\!\n  ex_hasObservation: ObservationInput\\!\n}",
+  sparqlQuery:
+      "PREFIX ex: <http://example.org/>\nSELECT ?pat ?value ?unit ?timestamp\nWHERE {\n  ?pat ex:hasObservation ?obs .\n  ?obs ex:value ?value ;\n       ex:unit ?unit ;\n       ex:timestamp ?timestamp .\n}",
+};
 
 // Convenience derived values
 
