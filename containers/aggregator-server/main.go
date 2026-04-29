@@ -189,8 +189,10 @@ func main() {
 		logrus.WithError(err).Warn("Failed to set up configuration endpoint (UMA might be down)")
 	}
 
-	// Client Identifier endpoint
-	config.InitClientIdentifier(serverMux)
+	// Solid Client Identifier endpoint
+	if solidOIDCEnabled {
+		config.InitClientIdentifier(serverMux)
+	}
 
 	// Server Description endpoint
 	config.InitServerDescription(serverMux)
@@ -206,9 +208,10 @@ func main() {
 
 	// Start HTTP server
 	loggingMux := loggingMiddleware(serverMux)
+	corsMux := corsMiddleware(loggingMux)
 	srv := &http.Server{
 		Addr:    ":5000",
-		Handler: corsMiddleware(loggingMux),
+		Handler: corsMux,
 	}
 
 	go func() {
@@ -405,22 +408,37 @@ func loggingMiddleware(next http.Handler) http.Handler {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Handle preflight OPTIONS requests
+
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			// Echo origin (required for credentials)
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+
+		// Allow all methods you care about
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH")
+
+		// Echo requested headers
+		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
+		if reqHeaders != "" {
+			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+		} else {
+			// Fallback
+			w.Header().Set("Access-Control-Allow-Headers", "*")
+		}
+
+		// Expose all response headers
+		w.Header().Set("Access-Control-Expose-Headers", "*")
+
+		// Allow credentials (cookies, auth headers)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+		// Handle preflight request
 		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
-			w.Header().Set("Access-Control-Max-Age", "86400")
-			w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-
-		// Add CORS headers to all responses
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
-		w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate")
 
 		next.ServeHTTP(w, r)
 	})

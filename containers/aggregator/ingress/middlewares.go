@@ -34,6 +34,12 @@ func UMAAuthMiddleware() Middleware {
 				return
 			}
 
+			// Healthz endpoint should be accessible without authentication
+			if strings.HasSuffix(r.URL.Path, "/healthz") {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			// Build resource ID for UMA lookup
 			host := r.Host
 			path := r.URL.Path
@@ -115,6 +121,11 @@ func StripPrefixMiddleware(prefix string) Middleware {
 func LoggingMiddleware() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/healthz" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			start := time.Now()
 
 			// Call the next handler
@@ -139,14 +150,36 @@ func LoggingMiddleware() Middleware {
 	}
 }
 
-func CORSMiddleware() Middleware {
+func CorsMiddleware() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
-			w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate")
 
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				// Echo origin (required for credentials)
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
+
+			// Allow all methods you care about
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH")
+
+			// Echo requested headers
+			reqHeaders := r.Header.Get("Access-Control-Request-Headers")
+			if reqHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+			} else {
+				// Fallback
+				w.Header().Set("Access-Control-Allow-Headers", "*")
+			}
+
+			// Expose all response headers
+			w.Header().Set("Access-Control-Expose-Headers", "*")
+
+			// Allow credentials (cookies, auth headers)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+			// Handle preflight request
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return

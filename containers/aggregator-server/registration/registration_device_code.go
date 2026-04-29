@@ -226,11 +226,11 @@ func processDeviceCodeFlow(session *DeviceSession, oidcConfig *model.OIDCConfig)
 		}
 
 		baseURL = inst.BaseURL
-		updateTokens(userID, tok, model.OIDCServer, model.OIDCClientId, model.OIDCClientSecret)
+		upsertTokens(userID, tok, model.OIDCServer, model.OIDCClientId, model.OIDCClientSecret)
 		logrus.Infof("Aggregator tokens updated (device_code flow): %s", session.AggregatorID)
 	} else {
 		// Store tokens in central token service
-		if err := storeTokens(
+		if err := upsertTokens(
 			userID,
 			tok,
 			model.OIDCServer,
@@ -260,7 +260,7 @@ func processDeviceCodeFlow(session *DeviceSession, oidcConfig *model.OIDCConfig)
 
 		// Create aggregator record
 		inst := instance.CreateAggregatorInstanceRecord(
-			session.AggregatorID,
+			userID,
 			"device_code",
 			session.AuthorizationServer,
 			aggregatorID,
