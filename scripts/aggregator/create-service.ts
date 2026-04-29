@@ -76,7 +76,7 @@ const PASSWORD = "alice";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = config.clientSecret;
 const IDP = "http://localhost:8280";
-const REALM = "kvasir";
+const REALM = "quarkus";
 
 const auth = new KeycloakOIDCAuth()
 await auth.init(IDP, REALM)
