@@ -5,7 +5,7 @@ The following demo will help you set up the Pacsoi Demo. This example assumes yo
 This demo will assume the following configuration:
 
   - Authentication:
-    - **keycloak realm**: `http://localhost:8280/realms/quarkus`
+    - **keycloak realm**: `http://localhost:8280/realms/kvasir`
     - **aggregator client ID**: `aggregator-server`
     - **aggregator client secret**: `01234`
     - **demo client ID**: `demo-client`

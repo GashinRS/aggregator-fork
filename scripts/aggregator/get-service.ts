@@ -7,7 +7,7 @@ const PASSWORD = "alice";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = config.clientSecret;
 const IDP = "http://localhost:8280";
-const REALM = "quarkus";
+const REALM = "kvasir";
 
 // Aggregator configuration
 const AGGREGATOR = `https://aggregator.local:5443/${config.aggregatorId}`
