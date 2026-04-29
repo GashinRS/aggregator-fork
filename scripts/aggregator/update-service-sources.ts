@@ -14,7 +14,7 @@ const PASSWORD = "alice";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = config.clientSecret;
 const IDP = "http://localhost:8280";
-const REALM = "quarkus";
+const REALM = "kvasir";
 
 // The new sources to overwrite with. Edit this list to change what the service queries.
 const NEW_SOURCES = [

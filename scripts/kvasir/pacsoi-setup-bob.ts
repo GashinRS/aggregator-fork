@@ -6,7 +6,7 @@ import { config } from "../config.js";
 const POD_URL = "http://localhost:8080/bob";
 const AS_SERVER = "http://localhost:4000/uma"
 const IDP = "http://localhost:8280";
-const REALM = "quarkus";
+const REALM = "kvasir";
 const CLIENT_ID = "demo-client";
 const CLIENT_UMA_ID = `http://example.com/id/${CLIENT_ID}`;
 const CLIENT_SECRET = config.clientSecret;

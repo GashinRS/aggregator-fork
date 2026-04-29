@@ -41,7 +41,7 @@ export const config: Config = {
   kvasirServer: "http://localhost:8080",
   asServer: "http://localhost:4000/uma",
   idp: "http://localhost:8280",
-  realm: "quarkus",
+  realm: "kvasir",
   clientId: "demo-client",
   clientSecret: "qw82AfD2zfnpt3P98RbEu9KWz4pseFB9",
   alice: {

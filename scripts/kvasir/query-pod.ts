@@ -4,7 +4,7 @@ import { KeycloakOIDCAuth } from "../util.js";
 
 const POD_URL = "http://localhost:8080/alice";
 const IDP = "http://localhost:8280";
-const REALM = "quarkus";
+const REALM = "kvasir";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = "oI6T6JNZR8ezbnWJafRIQtQrNIXCBqOh";
 
