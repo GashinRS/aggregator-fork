@@ -19,7 +19,7 @@ const AS_SERVER = "http://localhost:4000/uma";
 const SLICE_URL = `${POD_URL}/slices/AggregatorDemoSlice`;
 
 // Transformation configuration
-const SVC_NAME = 'systolic-blood-pressure3';
+const SVC_NAME = config.svcName;
 const TF_ID = "IncrementalKvasir";
 const PARAMS = {
     query: `
