@@ -16,7 +16,7 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
-    "@comunica-graphql/sparql2graphql-converter": "^1.1.1",
+    "@comunica-graphql/sparql2graphql-converter": "1.1.1",
     "@comunica/utils-bindings-factory": "^4.5.0",
     "async-mutex": "^0.5.0",
     "fastify": "^5.8.2",

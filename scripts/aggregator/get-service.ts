@@ -11,7 +11,9 @@ const REALM = "kvasir";
 
 // Aggregator configuration
 const AGGREGATOR = `https://aggregator.local:5443/${config.aggregatorId}`
-const SERVICE_ENDPOINT = `${AGGREGATOR}/test`;
+const SERVICE_ENDPOINT = `${AGGREGATOR}/systolic-blood-pressure2`;
+// const AGGREGATOR = `https://aggregator.local:5443/d0a77868-a93e-48ee-b811-2c21cf7a0fe5`
+// const SERVICE_ENDPOINT = `${AGGREGATOR}/test`;
 const OUTPUT_ENDPOINT = `${SERVICE_ENDPOINT}/result`;
 
 async function main() {

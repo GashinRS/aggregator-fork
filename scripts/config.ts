@@ -37,22 +37,22 @@ export interface Config {
 
 export const config: Config = {
   aggregatorServer: "https://aggregator.local:5443",
-  aggregatorId: "30c46e35-d08b-45d4-9b10-04d45522001a",
+  aggregatorId: "7a2a2e53-63ad-46cd-bc5b-f3e788c71986",
   kvasirServer: "http://localhost:8080",
   asServer: "http://localhost:4000/uma",
   idp: "http://localhost:8280",
   realm: "kvasir",
   clientId: "demo-client",
-  clientSecret: "qw82AfD2zfnpt3P98RbEu9KWz4pseFB9",
+  clientSecret: "demo-secret",
   alice: {
     username: "alice",
     password: "alice",
-    userId: "329cb5bb-78b7-4c37-9f91-9a275eaad331",
+    userId: "ccc3927c-2245-4667-bc9e-b2e800cd4c5f",
   },
   bob: {
     username: "bob",
     password: "bob",
-    userId: "1bf44527-b102-47a1-bebb-852807cd99c6",
+    userId: "d18857bd-1d1d-45c9-a900-05831d582a00",
   },
   svcName: "test",
   context: {

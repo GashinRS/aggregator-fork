@@ -16,47 +16,90 @@ const USER_UMA_ID = `http://example.com/id/${USER_ID}`;
 const USERNAME = "alice";
 const PASSWORD = "alice";
 
+// const CONTEXT = {
+//   "kss": "https://kvasir.discover.ilabt.imec.be/vocab#",
+//   "schema": "http://schema.org/",
+//   "ex": "http://example.org/"
+// };
+//
+// const SCHEMA = `
+// type Query {
+//   observations: [ex_Observation]!
+// }
+//
+// type ex_Patient {
+//   id: ID!
+// }
+//
+// type ex_Observation {
+//   id: ID!
+//   ex_value: Int!
+//   ex_unit: String!
+//   ex_timestamp: DateTime!
+//   forPatient: ex_Patient! @predicate(iri: "ex:hasObservation", reverse: true)
+// }
+//
+// type Subscription {
+//   observationAdded: ex_Observation!
+// }
+//
+// type Mutation {
+//   addObservation(obs: PatientObservationInput!): ID!
+// }
+//
+// input ObservationInput @class(iri: "ex:Observation") {
+//   id: ID!
+//   ex_value: Int!
+//   ex_unit: String!
+//   ex_timestamp: DateTime!
+// }
+//
+// input PatientObservationInput @class(iri: "ex:Patient") {
+//   id: ID!
+//   ex_hasObservation: ObservationInput!
+// }`;
+
 const CONTEXT = {
-  "kss": "https://kvasir.discover.ilabt.imec.be/vocab#",
-  "schema": "http://schema.org/",
-  "ex": "http://example.org/"
+  "saref": "https://saref.etsi.org/core/",
+  "void": "http://rdfs.org/ns/void#",
+  "protego": "https://dahcc.idlab.ugent.be/Protego/data/",
+  "wear": "https://dahcc.idlab.ugent.be/Homelab/SensorsAndWearables/",
+  "act": "https://dahcc.idlab.ugent.be/Homelab/SensorsAndActuators/",
+  "saw": "https://dahcc.idlab.ugent.be/Ontology/SensorsAndWearables/",
+  "saa": "https://dahcc.idlab.ugent.be/Ontology/SensorsAndActuators/",
+  "xsd": "http://www.w3.org/2001/XMLSchema#",
+  "kss": "https://kvasir.discover.ilabt.imec.be/vocab#"
 };
 
 const SCHEMA = `
 type Query {
-  observations: [ex_Observation]!
+  saref_Observation: [saref_Observation]!
 }
 
-type ex_Patient {
+type saref_Observation @class(iri: "saref:Observation") {
   id: ID!
-}
-
-type ex_Observation {
-  id: ID!
-  ex_value: Int!
-  ex_unit: String!
-  ex_timestamp: DateTime!
-  forPatient: ex_Patient! @predicate(iri: "ex:hasObservation", reverse: true)
+  saref_hasTimestamp: DateTime @predicate(iri: "saref:hasTimestamp")
+  saref_hasValue: String @predicate(iri: "saref:hasValue")
+  saref_madeBy: [ID] @predicate(iri: "saref:madeBy")
+  saref_observes: [ID] @predicate(iri: "saref:observes")
+  void_inDataset: [ID] @predicate(iri: "void:inDataset")
 }
 
 type Subscription {
-  observationAdded: ex_Observation!
+  saref_ObservationAdded: saref_Observation!
 }
 
 type Mutation {
-  addObservation(obs: PatientObservationInput!): ID!
+  addSarefObservation(obs: SarefObservationInput!): ID!
 }
 
-input ObservationInput @class(iri: "ex:Observation") {
+input SarefObservationInput @class(iri: "saref:Observation") {
   id: ID!
-  ex_value: Int!
-  ex_unit: String!
-  ex_timestamp: DateTime!
-}
-
-input PatientObservationInput @class(iri: "ex:Patient") {
-  id: ID!
-  ex_hasObservation: ObservationInput!
+  saref_hasTimestamp: DateTime @predicate(iri: "saref:hasTimestamp")
+  saref_hasValue: String @predicate(iri: "saref:hasValue")
+  saref_madeBy: [ID] @predicate(iri: "saref:madeBy")
+  saref_observes: [ID] @predicate(iri: "saref:observes")
+  void_inDataset: [ID] @predicate(iri: "void:inDataset")
 }`;
 
 const kvasir = new KvasirManagement(POD_URL, AS_SERVER);

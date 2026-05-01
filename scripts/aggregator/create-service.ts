@@ -7,14 +7,15 @@ const df = new DataFactory();
 
 // Aggregator configuration
 const AGGREGATOR_SERVER = "https://aggregator.local:5443";
-const AGGREGATOR = `https://aggregator.local:5443/${config.aggregatorId}`;
+const AGGREGATOR = `https://aggregator.local:5443/d0a77868-a93e-48ee-b811-2c21cf7a0fe5`;
 const TF = "/transformations";
 const SVC = "/services";
 
 // Transformation configuration
-const SVC_NAME = config.svcName;
+const SVC_NAME = 'test';
 const TF_ID = "IncrementalKvasir";
-const PARAMS = {
+const PARAMS =
+    {
     query: `
   PREFIX ex: <http://example.org/>
   SELECT ?pat ?value ?unit ?timestamp 
@@ -24,7 +25,7 @@ const PARAMS = {
         ex:unit ?unit ;
         ex:timestamp ?timestamp .
   }`,
-    sources: "http://localhost:8080/alice/slices/AggregatorDemoSlice/query,http://localhost:8080/bob/slices/AggregatorDemoSlice/query",
+    sources: "http://localhost:8080/bob/slices/AggregatorDemoSlice/query",
     schema: `
   type Query {
     observations: [ex_Observation]!
@@ -71,8 +72,8 @@ const PARAMS = {
 };
 
 // Authz configuration
-const USERNAME = "alice";
-const PASSWORD = "alice";
+const USERNAME = "bob";
+const PASSWORD = "bob";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = config.clientSecret;
 const IDP = "http://localhost:8280";
