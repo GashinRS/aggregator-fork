@@ -7,15 +7,14 @@ const df = new DataFactory();
 
 // Aggregator configuration
 const AGGREGATOR_SERVER = "https://aggregator.local:5443";
-const AGGREGATOR = `https://aggregator.local:5443/d0a77868-a93e-48ee-b811-2c21cf7a0fe5`;
+const AGGREGATOR = `https://aggregator.local:5443/${config.aggregatorId}`;
 const TF = "/transformations";
 const SVC = "/services";
 
 // Transformation configuration
-const SVC_NAME = 'test';
+const SVC_NAME = config.svcName;
 const TF_ID = "IncrementalKvasir";
-const PARAMS =
-    {
+const PARAMS = {
     query: `
   PREFIX ex: <http://example.org/>
   SELECT ?pat ?value ?unit ?timestamp 
