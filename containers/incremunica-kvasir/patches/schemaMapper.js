@@ -30,7 +30,11 @@ class SchemaMapper {
         };
         this.queryFields = [];
         this.types = new Map();
-        this.prefixes = Object.entries(context);
+        const merged = new Map(SchemaMapper.DEFAULT_PREFIXES);
+        for (const [prefix, iri] of Object.entries(context)) {
+            merged.set(prefix, iri);
+        }
+        this.prefixes = Array.from(merged.entries());
         schemaSource = `
       scalar BoxedLiteral
       scalar RDFNode
@@ -99,14 +103,21 @@ class SchemaMapper {
         }
         return value;
     }
-    calculatePossibleTrees(root) {
-        const edges = (0, trees_1.collectEdges)(root);
+    calculatePossibleTrees(trees) {
+        // Collect edges from ALL roots
+        const edges = [];
+        for (const root of trees.roots) {
+            (0, trees_1.collectEdges)(root, edges);
+        }
+        // Generate all combinations of edge directions
         const combos = edges.reduce((combos, edge) => {
             const variants = this.edgeVariants(edge);
+            // If no valid mapping exists → entire combo invalid
             if (!variants.length)
                 return [];
             return combos.flatMap(c => variants.map(v => [...c, v]));
         }, [[]]);
+        // Rebuild trees and filter only SINGLE ROOT ones
         return combos
             .map(edges => (0, trees_1.buildTrees)(edges))
             .filter(t => t.roots.length === 1)
@@ -153,6 +164,16 @@ class SchemaMapper {
     }
 }
 exports.SchemaMapper = SchemaMapper;
+SchemaMapper.DEFAULT_PREFIXES = [
+    ["rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"],
+    ["rdfs", "http://www.w3.org/2000/01/rdf-schema#"],
+    ["owl", "http://www.w3.org/2002/07/owl#"],
+    ["xsd", "http://www.w3.org/2001/XMLSchema#"],
+    ["skos", "http://www.w3.org/2004/02/skos/core#"],
+    ["dcterms", "http://purl.org/dc/terms/"],
+    ["foaf", "http://xmlns.com/foaf/0.1/"],
+    ["schema", "https://schema.org/"],
+];
 class TypeMapper {
     constructor(type, schema) {
         this.fields = new Map();
@@ -290,23 +311,13 @@ class TypeFieldMapper extends BaseFieldMapper {
         this.fieldTypeIRI = typeIRI
             ? schemaMapper.replaceSPARQLPrefix(typeIRI)
             : schemaMapper.toSPARQLContext(fieldType.name);
-        this.idArg = field.args.find(a => (0, graphql_1.getNamedType)(a.type) === graphql_1.GraphQLID && a.name === "id");
-        if (!this.idArg) {
-            this.idField = Object.values(fieldType.getFields())
-                .find(f => (0, graphql_1.getNamedType)(f.type) === graphql_1.GraphQLID && f.name === "id");
-        }
-    }
-    id() {
-        return this.idArg?.name ?? this.idField?.name;
     }
     withType(type) {
         (0, logger_1.getLogger)().debug(`type ${this.fieldTypeIRI} === ${type.value} ? ${this.fieldTypeIRI === type.value}`);
         return this.fieldTypeIRI === type.value;
     }
-    withSubject(subj) {
-        if (subj.termType === "Variable")
-            return !this.idArg || !(this.idArg.type instanceof graphql_1.GraphQLNonNull);
-        return !!this.idArg || !!this.idField;
+    withSubject(_subj) {
+        return true;
     }
     withPredicate(pred, node) {
         const field = this.schemaMapper.getField(this.fieldTypeIRI, pred);
@@ -325,14 +336,13 @@ class TypeFieldMapper extends BaseFieldMapper {
     toQuery(node, responseMapper) {
         responseMapper.addContext(this.field.name);
         let query = this.field.name;
-        const id = this.id();
         if (Object.keys(node.children).length) {
             if (node.term.termType === "NamedNode")
-                query += `(${id}: "${node.term.value}")`;
+                query += `(id: "${node.term.value}")`;
             query += " { ";
             if (node.term.termType === "Variable") {
-                query += `${id} `;
-                responseMapper.addVarMapping(node.term.value, "ID", id);
+                query += `id `;
+                responseMapper.addVarMapping(node.term.value, "ID", "id");
             }
             for (const [pred, child] of Object.entries(node.children)) {
                 const field = this.schemaMapper.getField(this.fieldTypeIRI, pred);
