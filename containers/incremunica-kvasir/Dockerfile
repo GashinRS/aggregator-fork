@@ -27,6 +27,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 
+# Apply converter patches for bound NamedNode IRI filtering
+COPY patches/responseMapper.js ./node_modules/@comunica-graphql/sparql2graphql-converter/build/converter/responseMapper.js
+COPY patches/schemaMapper.js ./node_modules/@comunica-graphql/sparql2graphql-converter/build/schema/schemaMapper.js
+
 # Copy built files
 COPY --from=builder /app/dist ./dist
 
