@@ -5,6 +5,9 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
+# Install git (required for npm overrides pointing to GitHub repos)
+RUN apk add --no-cache git
+
 # Install deps
 COPY package*.json ./
 RUN npm install
@@ -23,13 +26,12 @@ FROM node:22-alpine
 
 WORKDIR /app
 
+# Install git (required for npm overrides pointing to GitHub repos)
+RUN apk add --no-cache git
+
 # Only install production deps
 COPY package*.json ./
 RUN npm install --omit=dev
-
-# Apply converter patches for bound NamedNode IRI filtering
-COPY patches/responseMapper.js ./node_modules/@comunica-graphql/sparql2graphql-converter/build/converter/responseMapper.js
-COPY patches/schemaMapper.js ./node_modules/@comunica-graphql/sparql2graphql-converter/build/schema/schemaMapper.js
 
 # Copy built files
 COPY --from=builder /app/dist ./dist
