@@ -15,7 +15,7 @@ export async function querySources(
 
   console.log(`[QUERY] Preparing ${endpoints.length} endpoints`);
   const sources = endpoints.map(endpoint => {
-    console.log(`[QUERY] Adding source: ${endpoint}`);
+    console.log(`[QUERY] Preparing source: ${endpoint}`);
     return {
       value: endpoint,
       type: "graphql",
@@ -26,15 +26,7 @@ export async function querySources(
     }
   });
 
-  console.log("[QUERY] Executing query...");
-  const bindingsStream = await engine.queryBindings(query, {
-    sources: <any>sources,
-    fetch: umaProxyFetch
-  });
-
-  console.log("[STREAM] Query stream started");
-
-  bindingsStream.on('data', async (b) => {
+  const handleBinding = async (b: any) => {
     const key = b.toString();
     const addition = isAddition(b);
 
@@ -69,15 +61,27 @@ export async function querySources(
         }
       });
     }
-  });
+  };
 
-  bindingsStream.on('end', () => {
-    console.log("[STREAM] Query stream ended");
-  });
+  await Promise.all(sources.map(async (source) => {
+    console.log(`[QUERY] Executing query for source: ${source.value}`);
+    const bindingsStream = await engine.queryBindings(query, {
+      sources: <any>[source],
+      fetch: umaProxyFetch
+    });
 
-  bindingsStream.on('error', (err) => {
-    console.error('[STREAM] Error during query execution:', err);
-  });
+    console.log(`[STREAM] Query stream started for source: ${source.value}`);
+
+    bindingsStream.on('data', handleBinding);
+
+    bindingsStream.on('end', () => {
+      console.log(`[STREAM] Query stream ended for source: ${source.value}`);
+    });
+
+    bindingsStream.on('error', (err) => {
+      console.error(`[STREAM] Error during query execution for ${source.value}:`, err);
+    });
+  }));
 }
 
 export function materializedViewToSparqlJson(view: Map<string,{bindings: any, count: number}>) {

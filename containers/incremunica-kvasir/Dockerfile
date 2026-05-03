@@ -15,7 +15,7 @@ RUN npm install
 # Copy source
 COPY . .
 
-# Build TypeScript → JS
+# Build TypeScript -> JS
 RUN npm run build
 
 
@@ -35,6 +35,10 @@ RUN npm install --omit=dev
 
 # Copy built files
 COPY --from=builder /app/dist ./dist
+
+# Custom Comunica config (disables prune-empty-source-operations actor)
+# Loaded by query.ts at runtime via QueryEngineFactory.create({ configPath })
+COPY --from=builder /app/config ./config
 
 # Environment variable (can be overridden)
 ENV NODE_ENV=production
