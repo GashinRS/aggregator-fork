@@ -9,6 +9,7 @@ export interface Config {
   aggregatorServer: string;
   /** UUID of your aggregator instance — the part after the server URL */
   aggregatorId: string;
+  sliceName: string;
   /** Base URL of the Kvasir/Solid server, e.g. http://localhost:8080 */
   kvasirServer: string;
   /** UMA authorization server URL, e.g. http://localhost:4000/uma */
@@ -25,6 +26,8 @@ export interface Config {
   alice: UserConfig;
   /** Bob credentials and Keycloak user ID */
   bob: UserConfig;
+  patient1: UserConfig;
+  patient2: UserConfig;
   /** Default service name used by aggregator scripts */
   svcName: string;
   /** Shared JSON-LD context for Kvasir queries */
@@ -37,7 +40,8 @@ export interface Config {
 
 export const config: Config = {
   aggregatorServer: "https://aggregator.local:5443",
-  aggregatorId: "7a2a2e53-63ad-46cd-bc5b-f3e788c71986",
+  aggregatorId: "df1bd513-4762-4741-b799-f4465426f046",
+  sliceName: "test",
   kvasirServer: "http://localhost:8080",
   asServer: "http://localhost:4000/uma",
   idp: "http://localhost:8280",
@@ -47,14 +51,24 @@ export const config: Config = {
   alice: {
     username: "alice",
     password: "alice",
-    userId: "ccc3927c-2245-4667-bc9e-b2e800cd4c5f",
+    userId: "73c92e35-9fb0-4a88-858a-bfe56919baf3",
   },
   bob: {
     username: "bob",
     password: "bob",
-    userId: "d18857bd-1d1d-45c9-a900-05831d582a00",
+    userId: "2c032bd4-77a2-4b15-bba1-c0b7d33e25ad",
   },
-  svcName: "test",
+  patient1: {
+    username: "patient1",
+    password: "patient1",
+    userId: "754d6330-184f-4620-b7ed-c1ec080cd208",
+  },
+  patient2: {
+    username: "patient2",
+    password: "patient2",
+    userId: "e583a70e-3d6f-45ea-bffc-2a3cd9f58197",
+  },
+  svcName: "test8",
   context: {
     kss: "https://kvasir.discover.ilabt.imec.be/vocab#",
     schema: "http://schema.org/",
@@ -78,6 +92,9 @@ export function umaId(userId: string): string {
 
 /** Alice UMA ID */
 export const aliceUmaId = umaId(config.alice.userId);
+
+export const patient1UmaId = umaId(config.patient1.userId);
+export const patient2UmaId = umaId(config.patient2.userId);
 
 /** Bob UMA ID */
 export const bobUmaId = umaId(config.bob.userId);

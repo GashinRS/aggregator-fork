@@ -24,7 +24,8 @@ const PARAMS = {
         ex:unit ?unit ;
         ex:timestamp ?timestamp .
   }`,
-    sources: "http://localhost:8080/bob/slices/AggregatorDemoSlice/query",
+     sources: "http://localhost:8080/bob/slices/AggregatorDemoSlice/query,http://localhost:8080/alice/slices/AggregatorDemoSlice/query",
+    //sources: "http://localhost:8080/alice/slices/AggregatorDemoSlice/query",
     schema: `
   type Query {
     observations: [ex_Observation]!
@@ -71,8 +72,8 @@ const PARAMS = {
 };
 
 // Authz configuration
-const USERNAME = "bob";
-const PASSWORD = "bob";
+const USERNAME = "alice";
+const PASSWORD = "alice";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = config.clientSecret;
 const IDP = "http://localhost:8280";

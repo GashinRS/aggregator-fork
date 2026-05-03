@@ -1,7 +1,7 @@
 import { createPolicies } from "./policies.js";
 import { KvasirManagement } from "./management.js";
 import readline from "readline";
-import { config } from "../config.js";
+import { config, aliceUmaId } from "../config.js";
 
 const POD_URL = "http://localhost:8080/bob";
 const AS_SERVER = "http://localhost:4000/uma"
@@ -133,6 +133,21 @@ async function main() {
         assigner: USER_UMA_ID,
         target: `${slice}/changes`,
         scopes: ["read", "write"],
+      },
+
+      {
+        name: "AggregatorDemoSliceAggregatorOwnerQuery",
+        assignee: aliceUmaId,
+        assigner: USER_UMA_ID,
+        target: `${slice}/query`,
+        scopes: ["read"],
+      },
+      {
+        name: "AggregatorDemoSliceAggregatorOwnerChanges",
+        assignee: aliceUmaId,
+        assigner: USER_UMA_ID,
+        target: `${slice}/changes`,
+        scopes: ["read"],
       },
     ]);
 

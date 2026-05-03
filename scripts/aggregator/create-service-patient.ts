@@ -1,7 +1,7 @@
 import { KeycloakOIDCAuth } from "../util.js";
 import { DataFactory } from "rdf-data-factory";
 import { Writer } from "n3";
-import { config, aliceUmaId } from "../config.js";
+import { config, patient1UmaId } from "../config.js";
 import { createPolicies } from "../kvasir/policies.js";
 import { KvasirManagement } from "../kvasir/management.js";
 
@@ -14,7 +14,7 @@ const TF = "/transformations";
 const SVC = "/services";
 
 // Kvasir / UMA configuration
-const POD_URL = "http://localhost:8080/alice";
+const POD_URL = "http://localhost:8080/patient1";
 const AS_SERVER = "http://localhost:4000/uma";
 const SLICE_URL = `${POD_URL}/slices/${config.sliceName}`;
 
@@ -29,8 +29,7 @@ PREFIX wear: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndWearables/>
 
 SELECT ?dataset ?timestamp ?value
 WHERE {
-  ?obs a saref:Observation ;
-       saref:observes wear:org.dyamand.types.health.SystolicBloodPressure ;
+ ?obs  saref:observes wear:org.dyamand.types.health.SystolicBloodPressure ;
        saref:hasTimestamp ?timestamp ;
        saref:hasValue ?value ;
        void:inDataset ?dataset .
@@ -64,7 +63,8 @@ WHERE {
 //        saref:madeBy ?madeBy .
 // }
 // `,
-    sources: `http://localhost:8080/alice/slices/${config.sliceName}/query`,
+     sources: `http://localhost:8080/patient1/slices/${config.sliceName}/query,http://localhost:8080/patient2/slices/${config.sliceName}/query`,
+//    sources: `http://localhost:8080/patient1/slices/${config.sliceName}/query`,
     schema: `
 type Query {
   saref_Observation: [saref_Observation]!
@@ -110,8 +110,8 @@ input SarefObservationInput @class(iri: "saref:Observation") {
 };
 
 // Authz configuration
-const USERNAME = "alice";
-const PASSWORD = "alice";
+const USERNAME = "patient1";
+const PASSWORD = "patient1";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = config.clientSecret;
 const IDP = "http://localhost:8280";
@@ -165,15 +165,15 @@ async function setupUMAPolicies() {
     const { turtle } = await createPolicies([
         {
             name: "TestSliceOwnerQuery",
-            assignee: aliceUmaId,
-            assigner: aliceUmaId,
+            assignee: patient1UmaId,
+            assigner: patient1UmaId,
             target: `${SLICE_URL}/query`,
             scopes: ["read", "write"],
         },
         {
             name: "TestSliceOwnerChanges",
-            assignee: aliceUmaId,
-            assigner: aliceUmaId,
+            assignee: patient1UmaId,
+            assigner: patient1UmaId,
             target: `${SLICE_URL}/changes`,
             scopes: ["read", "write"],
         },
@@ -184,7 +184,7 @@ async function setupUMAPolicies() {
 }
 
 async function main() {
-    //await setupUMAPolicies();
+    await setupUMAPolicies();
     await createService();
 }
 

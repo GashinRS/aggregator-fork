@@ -2,8 +2,8 @@ import { KeycloakOIDCAuth } from "../util.js";
 import { config } from "../config.js";
 
 // Authz configuration
-const USERNAME = "alice";
-const PASSWORD = "alice";
+const USERNAME = "patient1";
+const PASSWORD = "patient1";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = config.clientSecret;
 const IDP = "http://localhost:8280";

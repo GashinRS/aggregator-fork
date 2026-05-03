@@ -1,7 +1,7 @@
 import { KeycloakOIDCAuth } from "../util.js";
 import { DataFactory } from "rdf-data-factory";
 import { Writer } from "n3";
-import { config, aliceUmaId } from "../config.js";
+import { config, patient1UmaId, patient2UmaId } from "../config.js";
 import { createPolicies } from "../kvasir/policies.js";
 import { KvasirManagement } from "../kvasir/management.js";
 
@@ -14,7 +14,7 @@ const TF = "/transformations";
 const SVC = "/services";
 
 // Kvasir / UMA configuration
-const POD_URL = "http://localhost:8080/alice";
+const POD_URL = "http://localhost:8080/patient2";
 const AS_SERVER = "http://localhost:4000/uma";
 const SLICE_URL = `${POD_URL}/slices/${config.sliceName}`;
 
@@ -64,7 +64,8 @@ WHERE {
 //        saref:madeBy ?madeBy .
 // }
 // `,
-    sources: `http://localhost:8080/alice/slices/${config.sliceName}/query`,
+//     sources: `http://localhost:8080/patient1/slices/${config.sliceName}/query,http://localhost:8080/patient2/slices/${config.sliceName}/query`,
+    sources: `http://localhost:8080/patient2/slices/${config.sliceName}/query`,
     schema: `
 type Query {
   saref_Observation: [saref_Observation]!
@@ -110,8 +111,8 @@ input SarefObservationInput @class(iri: "saref:Observation") {
 };
 
 // Authz configuration
-const USERNAME = "alice";
-const PASSWORD = "alice";
+const USERNAME = "patient2";
+const PASSWORD = "patient2";
 const CLIENT_ID = "demo-client";
 const CLIENT_SECRET = config.clientSecret;
 const IDP = "http://localhost:8280";
@@ -159,21 +160,22 @@ async function setupUMAPolicies() {
     console.log("▶ Delegating pod to UMA...");
     await kvasir.delegatePodToUMA();
 
-    // Grant Alice (= the aggregator's egress-uma identity) read/write access
-    // to the test slice's query and changes endpoints
+    // Grant patient1 (= the aggregator's egress-uma identity) read access
+    // to patient2's test slice query and changes endpoints.
+    // patient1 is the aggregator owner whose token the egress-uma presents (USER_ID).
     console.log("▶ Registering access policies for test slice...");
     const { turtle } = await createPolicies([
         {
             name: "TestSliceOwnerQuery",
-            assignee: aliceUmaId,
-            assigner: aliceUmaId,
+            assignee: patient1UmaId,  // aggregator's operating identity
+            assigner: patient2UmaId,  // patient2 grants this permission
             target: `${SLICE_URL}/query`,
             scopes: ["read", "write"],
         },
         {
             name: "TestSliceOwnerChanges",
-            assignee: aliceUmaId,
-            assigner: aliceUmaId,
+            assignee: patient1UmaId,  // aggregator's operating identity
+            assigner: patient2UmaId,  // patient2 grants this permission
             target: `${SLICE_URL}/changes`,
             scopes: ["read", "write"],
         },
@@ -184,8 +186,8 @@ async function setupUMAPolicies() {
 }
 
 async function main() {
-    //await setupUMAPolicies();
-    await createService();
+    await setupUMAPolicies();
+    //await createService();
 }
 
 async function parseServiceRequest(
