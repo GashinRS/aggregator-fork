@@ -1,7 +1,34 @@
 import { performance } from "node:perf_hooks";
 import { Buffer } from "node:buffer";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { KeycloakOIDCAuth } from "../util.js";
 import { config } from "../config.js";
+
+const WORKLOADS: Record<string, string[]> = {
+  W1: [
+    "smartphone-step",
+    "wearable-gsr",
+  ],
+  W2: [
+    "smartphone-step",
+    "wearable-gsr",
+    "wearable-bvp",
+  ],
+  W3: [
+    "smartphone-step",
+    "aqura-location-state",
+    "wearable-gsr",
+    "wearable-bvp",
+  ],
+  W4: [
+    "smartphone-step",
+    "aqura-location-state",
+    "wearable-ibi",
+    "wearable-gsr",
+    "wearable-skt",
+    "wearable-bvp",
+  ],
+};
 
 interface Options {
   svcNames: string[];
@@ -11,6 +38,8 @@ interface Options {
   durationMs: number;
   runId: string;
   description: boolean;
+  workload?: string;
+  outFile?: string;
 }
 
 function getArg(name: string): string | undefined {
@@ -28,6 +57,15 @@ function parseList(value: string | undefined, fallback: string): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function servicesForWorkload(workload: string): string[] {
+  const key = workload.trim().toUpperCase();
+  const services = WORKLOADS[key];
+  if (!services) {
+    throw new Error(`Unknown workload "${workload}". Expected one of: ${Object.keys(WORKLOADS).join(", ")}`);
+  }
+  return services;
 }
 
 function parseDurationMs(value: string | undefined, fallbackMs: number): number {
@@ -67,7 +105,10 @@ function readOptions(): Options {
     throw new Error(`Invalid count: ${count}`);
   }
 
-  const svcNames = parseList(getArg("--svc"), config.svcName);
+  const workload = getArg("--workload");
+  const svcNames = workload
+    ? servicesForWorkload(workload)
+    : parseList(getArg("--svc"), config.svcName);
   const outputNames = parseList(getArg("--output"), "result");
   if (svcNames.length === 0) throw new Error("At least one service must be provided");
   if (outputNames.length > 1 && outputNames.length !== svcNames.length) {
@@ -82,14 +123,22 @@ function readOptions(): Options {
     durationMs: parseDurationMs(getArg("--duration"), 0),
     runId: getArg("--run-id") ?? "manual",
     description: hasArg("--description"),
+    workload: workload?.trim().toUpperCase(),
+    outFile: getArg("--out"),
   };
 }
 
-function logMeasurement(event: Record<string, unknown>) {
-  console.log(JSON.stringify({
+function logMeasurement(opts: Options, event: Record<string, unknown>) {
+  const line = JSON.stringify({
     ts: new Date().toISOString(),
     ...event,
-  }));
+  });
+
+  if (opts.outFile) {
+    appendFileSync(opts.outFile, `${line}\n`, "utf8");
+  } else {
+    console.log(line);
+  }
 }
 
 function outputForService(opts: Options, index: number): string {
@@ -134,11 +183,12 @@ async function pollEndpoint(
     error = err instanceof Error ? err.message : String(err);
   }
 
-  logMeasurement({
+  logMeasurement(opts, {
     run_id: opts.runId,
     stage: opts.description ? "service_description_read" : "t7",
     event: "poll_result",
     aggregator: config.aggregatorId,
+    workload: opts.workload,
     service: svcName,
     output: opts.description ? undefined : outputName,
     endpoint,
@@ -159,6 +209,7 @@ async function pollEndpoint(
 async function main() {
   const opts = readOptions();
   const stopAt = opts.durationMs > 0 ? Date.now() + opts.durationMs : Number.POSITIVE_INFINITY;
+  if (opts.outFile) writeFileSync(opts.outFile, "", "utf8");
 
   console.error("=== Initializing Keycloak Authentication ===");
   const auth = new KeycloakOIDCAuth();
@@ -171,6 +222,7 @@ async function main() {
   );
 
   const umaFetch = auth.createUMAFetch();
+  if (opts.workload) console.error(`Workload: ${opts.workload}`);
   console.error(`Polling services: ${opts.svcNames.join(", ")}`);
   if (!opts.description) console.error(`Polling outputs: ${opts.outputNames.join(", ")}`);
   console.error(`Interval: ${opts.intervalMs}ms`);

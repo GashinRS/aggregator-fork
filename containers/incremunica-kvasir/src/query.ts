@@ -1,10 +1,19 @@
 import { QueryEngine } from "@incremunica/query-sparql-incremental";
 import { isAddition } from '@incremunica/user-tools';
 import { Mutex } from "async-mutex";
+import { Agent } from "undici";
 import { logMeasurement, viewRowCount } from "./measurement.js";
 
 const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
 const MEASUREMENT_LOG_INTERVAL_MS = parseInt(process.env.MEASUREMENT_LOG_INTERVAL_MS || "1000", 10);
+const STREAM_RECONNECT_INITIAL_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_INITIAL_DELAY_MS || "1000", 10);
+const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_DELAY_MS || "30000", 10);
+const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_BACKOFF_FACTOR || "2");
+
+const streamingDispatcher = new Agent({
+  bodyTimeout: 0,
+  headersTimeout: 0,
+});
 
 interface StreamCounters {
   totalAdds: number;
@@ -110,12 +119,27 @@ export async function querySources(
     }
   };
 
-  await Promise.all(sources.map(async (source) => {
+  const startSource = async (source: typeof sources[number], reconnectAttempt = 0): Promise<void> => {
     console.log(`[QUERY] Executing query for source: ${source.value}`);
-    const bindingsStream = await engine.queryBindings(query, {
-      sources: <any>[source],
-      fetch: umaProxyFetch
-    });
+
+    let bindingsStream;
+    try {
+      bindingsStream = await engine.queryBindings(query, {
+        sources: <any>[source],
+        fetch: umaProxyFetch
+      });
+    } catch (err) {
+      console.error(`[STREAM] Failed to start query stream for ${source.value}:`, err);
+      logMeasurement({
+        stage: "t6",
+        event: "stream_start_error",
+        source: source.value,
+        reconnect_attempt: reconnectAttempt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      scheduleReconnect(source, reconnectAttempt + 1);
+      return;
+    }
 
     console.log(`[STREAM] Query stream started for source: ${source.value}`);
     logMeasurement({
@@ -123,35 +147,72 @@ export async function querySources(
       event: "stream_started",
       source: source.value,
       source_count: sources.length,
+      reconnect_attempt: reconnectAttempt,
     });
 
     bindingsStream.on('data', (binding) => {
       void handleBinding(binding, source.value);
     });
 
+    let reconnectScheduled = false;
+    const closeAndReconnect = (reason: "end" | "error", err?: unknown) => {
+      if (reconnectScheduled) return;
+      reconnectScheduled = true;
+
+      if (reason === "error") {
+        console.error(`[STREAM] Error during query execution for ${source.value}:`, err);
+        logMeasurement({
+          stage: "t6",
+          event: "stream_error",
+          source: source.value,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } else {
+        console.log(`[STREAM] Query stream ended for source: ${source.value}`);
+        logMeasurement({
+          stage: "t6",
+          event: "stream_ended",
+          source: source.value,
+          view_unique: view.size,
+          view_rows: viewRowCount(view),
+          total_adds: counters.totalAdds,
+          total_removes: counters.totalRemoves,
+        });
+      }
+
+      scheduleReconnect(source, reconnectAttempt + 1);
+    };
+
     bindingsStream.on('end', () => {
-      console.log(`[STREAM] Query stream ended for source: ${source.value}`);
-      logMeasurement({
-        stage: "t6",
-        event: "stream_ended",
-        source: source.value,
-        view_unique: view.size,
-        view_rows: viewRowCount(view),
-        total_adds: counters.totalAdds,
-        total_removes: counters.totalRemoves,
-      });
+      closeAndReconnect("end");
     });
 
     bindingsStream.on('error', (err) => {
-      console.error(`[STREAM] Error during query execution for ${source.value}:`, err);
-      logMeasurement({
-        stage: "t6",
-        event: "stream_error",
-        source: source.value,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      closeAndReconnect("error", err);
     });
-  }));
+  };
+
+  const scheduleReconnect = (source: typeof sources[number], reconnectAttempt: number) => {
+    const delay = Math.min(
+      STREAM_RECONNECT_INITIAL_DELAY_MS * Math.pow(STREAM_RECONNECT_BACKOFF_FACTOR, reconnectAttempt - 1),
+      STREAM_RECONNECT_MAX_DELAY_MS,
+    );
+
+    console.warn(`[STREAM] Reconnecting source ${source.value} in ${delay}ms (attempt ${reconnectAttempt})`);
+    logMeasurement({
+      stage: "t6",
+      event: "stream_reconnect_scheduled",
+      source: source.value,
+      reconnect_attempt: reconnectAttempt,
+      reconnect_delay_ms: delay,
+    });
+
+    setTimeout(() => {
+      void startSource(source, reconnectAttempt);
+    }, delay);
+  };
+
+  await Promise.all(sources.map(source => startSource(source)));
 }
 
 export function materializedViewToSparqlJson(view: Map<string,{bindings: any, count: number}>) {
@@ -219,6 +280,25 @@ async function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function isSseInit(init?: RequestInit): boolean {
+  const acceptHeader = init?.headers instanceof Headers
+    ? init.headers.get("Accept")
+    : typeof init?.headers === "object"
+      ? ((init.headers as Record<string, string>)["Accept"] || (init.headers as Record<string, string>)["accept"])
+      : undefined;
+
+  return acceptHeader?.includes("text/event-stream") ?? false;
+}
+
+function fetchWithOptionalStreamingDispatcher(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if (!isSseInit(init)) return fetch(input, init);
+
+  return fetch(input, {
+    ...init,
+    dispatcher: streamingDispatcher,
+  } as RequestInit);
+}
+
 async function umaProxyFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   let target = input.toString();
   const originalUrl = target;
@@ -228,14 +308,14 @@ async function umaProxyFetch(input: RequestInfo | URL, init?: RequestInit): Prom
   if (target.startsWith("https")) {
     if (!process.env.HTTPS_PROXY && !process.env.https_proxy) {
       console.log("[FETCH] No HTTPS proxy configured, direct request");
-      return fetch(input, init);
+      return fetchWithOptionalStreamingDispatcher(input, init);
     }
     console.log("[FETCH] Using HTTPS proxy");
     target = (process.env.HTTPS_PROXY || process.env.https_proxy) + "/fetch";
   } else {
     if (!process.env.HTTP_PROXY && !process.env.http_proxy) {
       console.log("[FETCH] No HTTP proxy configured, direct request");
-      return fetch(input, init);
+      return fetchWithOptionalStreamingDispatcher(input, init);
     }
     console.log("[FETCH] Using HTTP proxy");
     target = (process.env.HTTP_PROXY || process.env.http_proxy) + "/fetch";
@@ -255,13 +335,9 @@ async function umaProxyFetch(input: RequestInfo | URL, init?: RequestInit): Prom
   }
 
   // If SSE, ensure necessary headers
-  const acceptHeader = init?.headers instanceof Headers
-    ? init.headers.get("Accept")
-    : typeof init?.headers === "object"
-      ? (init.headers as Record<string, string>)["Accept"]
-      : undefined;
+  const isSseRequest = isSseInit(init);
 
-  if (acceptHeader === "text/event-stream") {
+  if (isSseRequest) {
     console.log("[FETCH] SSE detected, adding streaming headers to payload");
     bodyHeaders["Accept"] = "text/event-stream";
     bodyHeaders["Cache-Control"] = "no-cache";
@@ -287,8 +363,9 @@ async function umaProxyFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(fetchRequest)
-    });
+      body: JSON.stringify(fetchRequest),
+      ...(isSseRequest ? { dispatcher: streamingDispatcher } : {}),
+    } as RequestInit);
 
     console.log(`[FETCH] Proxy response received (status: ${response.status}, attempt: ${attempt + 1}/${RETRY_MAX_ATTEMPTS})`);
 

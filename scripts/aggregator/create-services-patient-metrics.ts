@@ -16,6 +16,28 @@ type ServiceDefinition = {
   metric: string;
 };
 
+type KvasirClientSource = {
+  client: string;
+  server: string;
+};
+
+function withoutTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+// Each client can point to a different Kvasir server. If no per-client
+// server is provided, the script falls back to config.kvasirServer.
+const KVASIR_CLIENT_SOURCES: KvasirClientSource[] = [
+  {
+    client: "patient1",
+    server: process.env.KVASIR_SERVER_PATIENT1 ?? config.kvasirServer,
+  },
+  {
+    client: "patient2",
+    server: process.env.KVASIR_SERVER_PATIENT2 ?? config.kvasirServer,
+  },
+];
+
 // Edit this list to choose which services this script creates.
 // Metrics should already include the correct query token:
 // - wear:* for Homelab/SensorsAndWearables metrics
@@ -74,7 +96,7 @@ const RAW_SERVICES: ServiceDefinition[] = [
   // { service: "weather-windspeed", metric: "act:weather.windspeed" },
   // { service: "environment-relay", metric: "act:environment.relay" },
   // { service: "environment-button", metric: "act:environment.button" },
-  // { service: "wearable-battery-level", metric: "wear:wearable.battery_level" },
+  { service: "wearable-battery-level", metric: "wear:wearable.battery_level" },
   // { service: "smartphone-screen", metric: "wear:smartphone.screen" },
   // { service: "environment-blind", metric: "act:environment.blind" },
   // { service: "wearable-on-wrist", metric: "wear:wearable.on_wrist" },
@@ -90,23 +112,22 @@ const RAW_SERVICES: ServiceDefinition[] = [
   { service: "body-temperature", metric: "wear:org.dyamand.types.health.BodyTemperature" },
   { service: "diastolic-blood-pressure", metric: "wear:org.dyamand.types.health.DiastolicBloodPressure" },
   { service: "systolic-blood-pressure", metric: "wear:org.dyamand.types.health.SystolicBloodPressure" },
-  { service: "wearable-bvp", metric: "wear:wearable.bvp" },
-  { service: "wearable-gsr", metric: "wear:wearable.gsr" },
-  { service: "wearable-skt", metric: "wear:wearable.skt" },
-  { service: "wearable-ibi", metric: "wear:wearable.ibi" },
-];
-
-const SAMPLED_SERVICES: ServiceDefinition[] = [
   // { service: "wearable-bvp", metric: "wear:wearable.bvp" },
   // { service: "wearable-gsr", metric: "wear:wearable.gsr" },
   // { service: "wearable-skt", metric: "wear:wearable.skt" },
   // { service: "wearable-ibi", metric: "wear:wearable.ibi" },
 ];
 
-const SOURCES = [
-  `${config.kvasirServer}/patient1/slices/${config.sliceName}/query`,
-  `${config.kvasirServer}/patient2/slices/${config.sliceName}/query`,
-].join(",");
+const SAMPLED_SERVICES: ServiceDefinition[] = [
+  { service: "wearable-bvp", metric: "wear:wearable.bvp" },
+  { service: "wearable-gsr", metric: "wear:wearable.gsr" },
+  { service: "wearable-skt", metric: "wear:wearable.skt" },
+  { service: "wearable-ibi", metric: "wear:wearable.ibi" },
+];
+
+const SOURCES = KVASIR_CLIENT_SOURCES
+  .map(({ client, server }) => `${withoutTrailingSlash(server)}/${client}/slices/${config.sliceName}/query`)
+  .join(",");
 
 const SCHEMA = `
 type Query {
