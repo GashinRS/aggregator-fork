@@ -1,6 +1,7 @@
 import { querySources, materializedViewToSparqlJson } from "./query.js";
 import Fastify from "fastify";
 import { Mutex } from "async-mutex";
+import { logMeasurement, viewRowCount } from "./measurement.js";
 
 async function main() {
   console.log("[BOOT] Starting application...");
@@ -82,13 +83,33 @@ async function main() {
       console.log("[HTTP] Acquired mutex, preparing response");
 
       try {
+        const started = performance.now();
         const result = materializedViewToSparqlJson(view);
+        const serializeMs = Math.round((performance.now() - started) * 1000) / 1000;
+        const rows = result.results.bindings.length;
+        const responseBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
         console.log(`[HTTP] Returning result with ${view.size} entries`);
+        logMeasurement({
+          stage: "service_read",
+          event: "http_result",
+          request_ip: request.ip,
+          view_unique: view.size,
+          view_rows: viewRowCount(view),
+          result_rows: rows,
+          serialize_ms: serializeMs,
+          response_bytes: responseBytes,
+        });
 
         reply.header("Content-Type", "application/sparql-results+json");
         return result;
       } catch (err) {
         console.error("[HTTP] Error while building response:", err);
+        logMeasurement({
+          stage: "service_read",
+          event: "http_error",
+          request_ip: request.ip,
+          error: err instanceof Error ? err.message : String(err),
+        });
         reply.status(500);
         return { error: "Internal server error" };
       }

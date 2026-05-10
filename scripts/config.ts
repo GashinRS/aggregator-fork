@@ -40,7 +40,7 @@ export interface Config {
 
 export const config: Config = {
   aggregatorServer: "https://aggregator.local:5443",
-  aggregatorId: "df1bd513-4762-4741-b799-f4465426f046",
+  aggregatorId: "8820464d-790b-43e7-a551-f6c718bd8e25",
   sliceName: "test",
   kvasirServer: "http://localhost:8080",
   asServer: "http://localhost:4000/uma",
@@ -68,7 +68,7 @@ export const config: Config = {
     password: "patient2",
     userId: "e583a70e-3d6f-45ea-bffc-2a3cd9f58197",
   },
-  svcName: "test8",
+  svcName: "test3",
   context: {
     kss: "https://kvasir.discover.ilabt.imec.be/vocab#",
     schema: "http://schema.org/",

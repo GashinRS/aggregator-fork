@@ -21,79 +21,86 @@ type ServiceDefinition = {
 // - wear:* for Homelab/SensorsAndWearables metrics
 // - act:* for Homelab/SensorsAndActuators metrics
 // - <full IRI> for metric names that are not legal SPARQL prefixed names
-const SERVICES: ServiceDefinition[] = [
-  { service: "wearable-bvp", metric: "wear:wearable.bvp" },
-  { service: "smartphone-acceleration-x", metric: "wear:smartphone.acceleration.x" },
-  { service: "smartphone-acceleration-y", metric: "wear:smartphone.acceleration.y" },
-  { service: "smartphone-acceleration-z", metric: "wear:smartphone.acceleration.z" },
-  { service: "smartphone-magnetometer-x", metric: "wear:smartphone.magnetometer.x" },
-  { service: "smartphone-magnetometer-y", metric: "wear:smartphone.magnetometer.y" },
-  { service: "smartphone-magnetometer-z", metric: "wear:smartphone.magnetometer.z" },
-  { service: "smartphone-gravity-x", metric: "wear:smartphone.gravity.x" },
-  { service: "smartphone-gravity-y", metric: "wear:smartphone.gravity.y" },
-  { service: "smartphone-gravity-z", metric: "wear:smartphone.gravity.z" },
-  { service: "smartphone-gyroscope-x", metric: "wear:smartphone.gyroscope.x" },
-  { service: "smartphone-gyroscope-y", metric: "wear:smartphone.gyroscope.y" },
-  { service: "smartphone-gyroscope-z", metric: "wear:smartphone.gyroscope.z" },
-  { service: "smartphone-linear-acceleration-x", metric: "wear:smartphone.linear_acceleration.x" },
-  { service: "smartphone-linear-acceleration-y", metric: "wear:smartphone.linear_acceleration.y" },
-  { service: "smartphone-linear-acceleration-z", metric: "wear:smartphone.linear_acceleration.z" },
-  { service: "smartphone-rotation-x", metric: "wear:smartphone.rotation.x" },
-  { service: "smartphone-rotation-y", metric: "wear:smartphone.rotation.y" },
-  { service: "smartphone-rotation-z", metric: "wear:smartphone.rotation.z" },
-  { service: "wearable-acceleration-x", metric: "wear:wearable.acceleration.x" },
-  { service: "wearable-acceleration-y", metric: "wear:wearable.acceleration.y" },
-  { service: "wearable-acceleration-z", metric: "wear:wearable.acceleration.z" },
-  { service: "energy-consumption", metric: "act:energy.consumption" },
-  { service: "energy-power", metric: "act:energy.power" },
-  { service: "wearable-gsr", metric: "wear:wearable.gsr" },
-  { service: "wearable-skt", metric: "wear:wearable.skt" },
-  { service: "environment-light", metric: "act:environment.light" },
-  { service: "environment-temperature", metric: "act:environment.temperature" },
-  { service: "people-presence-detected", metric: "act:people.presence.detected" },
-  { service: "mqtt-last-message", metric: "act:mqtt.lastMessage" },
-  { service: "people-presence-number-detected", metric: "act:people.presence.numberDetected" },
-  { service: "environment-motion", metric: "act:environment.motion" },
-  { service: "smartphone-ambient-light", metric: "wear:smartphone.ambient_light" },
-  { service: "wearable-ibi", metric: "wear:wearable.ibi" },
-  { service: "environment-voltage", metric: "act:environment.voltage" },
-  { service: "environment-relativehumidity", metric: "act:environment.relativehumidity" },
-  { service: "airquality-co2", metric: "act:airquality.co2" },
-  { service: "smartphone-application", metric: "wear:smartphone.application" },
-  { service: "smartphone-keyboard", metric: "wear:smartphone.keyboard" },
-  { service: "weather-pressure", metric: "act:weather.pressure" },
+const RAW_SERVICES: ServiceDefinition[] = [
+  // { service: "smartphone-acceleration-x", metric: "wear:smartphone.acceleration.x" },
+  // { service: "smartphone-acceleration-y", metric: "wear:smartphone.acceleration.y" },
+  // { service: "smartphone-acceleration-z", metric: "wear:smartphone.acceleration.z" },
+  // { service: "smartphone-magnetometer-x", metric: "wear:smartphone.magnetometer.x" },
+  // { service: "smartphone-magnetometer-y", metric: "wear:smartphone.magnetometer.y" },
+  // { service: "smartphone-magnetometer-z", metric: "wear:smartphone.magnetometer.z" },
+  // { service: "smartphone-gravity-x", metric: "wear:smartphone.gravity.x" },
+  // { service: "smartphone-gravity-y", metric: "wear:smartphone.gravity.y" },
+  // { service: "smartphone-gravity-z", metric: "wear:smartphone.gravity.z" },
+  // { service: "smartphone-gyroscope-x", metric: "wear:smartphone.gyroscope.x" },
+  // { service: "smartphone-gyroscope-y", metric: "wear:smartphone.gyroscope.y" },
+  // { service: "smartphone-gyroscope-z", metric: "wear:smartphone.gyroscope.z" },
+  // { service: "smartphone-linear-acceleration-x", metric: "wear:smartphone.linear_acceleration.x" },
+  // { service: "smartphone-linear-acceleration-y", metric: "wear:smartphone.linear_acceleration.y" },
+  // { service: "smartphone-linear-acceleration-z", metric: "wear:smartphone.linear_acceleration.z" },
+  // { service: "smartphone-rotation-x", metric: "wear:smartphone.rotation.x" },
+  // { service: "smartphone-rotation-y", metric: "wear:smartphone.rotation.y" },
+  // { service: "smartphone-rotation-z", metric: "wear:smartphone.rotation.z" },
+  // { service: "wearable-acceleration-x", metric: "wear:wearable.acceleration.x" },
+  // { service: "wearable-acceleration-y", metric: "wear:wearable.acceleration.y" },
+  // { service: "wearable-acceleration-z", metric: "wear:wearable.acceleration.z" },
+  // { service: "energy-consumption", metric: "act:energy.consumption" },
+  // { service: "energy-power", metric: "act:energy.power" },
+  // { service: "environment-light", metric: "act:environment.light" },
+  // { service: "environment-temperature", metric: "act:environment.temperature" },
+  // { service: "people-presence-detected", metric: "act:people.presence.detected" },
+  // { service: "mqtt-last-message", metric: "act:mqtt.lastMessage" },
+  // { service: "people-presence-number-detected", metric: "act:people.presence.numberDetected" },
+  // { service: "environment-motion", metric: "act:environment.motion" },
+  // { service: "smartphone-ambient-light", metric: "wear:smartphone.ambient_light" },
+  // { service: "environment-voltage", metric: "act:environment.voltage" },
+  // { service: "environment-relativehumidity", metric: "act:environment.relativehumidity" },
+  // { service: "airquality-co2", metric: "act:airquality.co2" },
+  // { service: "smartphone-application", metric: "wear:smartphone.application" },
+  // { service: "smartphone-keyboard", metric: "wear:smartphone.keyboard" },
+  // { service: "weather-pressure", metric: "act:weather.pressure" },
   { service: "smartphone-step", metric: "wear:smartphone.step" },
-  { service: "environment-open", metric: "act:environment.open" },
-  { service: "airquality-voc-total", metric: "act:airquality.voc_total" },
-  { service: "smartphone-proximity", metric: "wear:smartphone.proximity" },
+  // { service: "environment-open", metric: "act:environment.open" },
+  // { service: "airquality-voc-total", metric: "act:airquality.voc_total" },
+  // { service: "smartphone-proximity", metric: "wear:smartphone.proximity" },
   { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
-  { service: "dyamand-airquality-co2", metric: "act:org.dyamand.types.airquality.CO2" },
-  { service: "atmospheric-pressure", metric: "act:org.dyamand.types.common.AtmosphericPressure" },
-  { service: "loudness", metric: "act:org.dyamand.types.common.Loudness" },
-  { service: "relative-humidity", metric: "act:org.dyamand.types.common.RelativeHumidity" },
-  { service: "temperature", metric: "act:org.dyamand.types.common.Temperature" },
-  { service: "water-running", metric: "<https://dahcc.idlab.ugent.be/Homelab/SensorsAndActuators/environment.waterRunning::bool>" },
-  { service: "environment-lightswitch", metric: "act:environment.lightswitch" },
-  { service: "weather-rainrate", metric: "act:weather.rainrate" },
-  { service: "weather-windspeed", metric: "act:weather.windspeed" },
-  { service: "environment-relay", metric: "act:environment.relay" },
-  { service: "environment-button", metric: "act:environment.button" },
-  { service: "wearable-battery-level", metric: "wear:wearable.battery_level" },
-  { service: "smartphone-screen", metric: "wear:smartphone.screen" },
-  { service: "environment-blind", metric: "act:environment.blind" },
-  { service: "wearable-on-wrist", metric: "wear:wearable.on_wrist" },
-  { service: "smartphone-location-accuracy", metric: "wear:smartphone.location.accuracy" },
-  { service: "smartphone-location-altitude", metric: "wear:smartphone.location.altitude" },
-  { service: "smartphone-location-bearing", metric: "wear:smartphone.location.bearing" },
-  { service: "smartphone-location-latitude", metric: "wear:smartphone.location.latitude" },
-  { service: "smartphone-location-longitude", metric: "wear:smartphone.location.longitude" },
-  { service: "environment-dimmer", metric: "act:environment.dimmer" },
-  { service: "heart-rate", metric: "wear:org.dyamand.types.health.HeartRate" },
-  { service: "spo2", metric: "wear:org.dyamand.types.health.SpO2" },
-  { service: "load", metric: "act:org.dyamand.types.common.Load" },
+  // { service: "dyamand-airquality-co2", metric: "act:org.dyamand.types.airquality.CO2" },
+  // { service: "atmospheric-pressure", metric: "act:org.dyamand.types.common.AtmosphericPressure" },
+  // { service: "loudness", metric: "act:org.dyamand.types.common.Loudness" },
+  // { service: "relative-humidity", metric: "act:org.dyamand.types.common.RelativeHumidity" },
+  // { service: "temperature", metric: "act:org.dyamand.types.common.Temperature" },
+  // { service: "water-running", metric: "<https://dahcc.idlab.ugent.be/Homelab/SensorsAndActuators/environment.waterRunning::bool>" },
+  // { service: "environment-lightswitch", metric: "act:environment.lightswitch" },
+  // { service: "weather-rainrate", metric: "act:weather.rainrate" },
+  // { service: "weather-windspeed", metric: "act:weather.windspeed" },
+  // { service: "environment-relay", metric: "act:environment.relay" },
+  // { service: "environment-button", metric: "act:environment.button" },
+  // { service: "wearable-battery-level", metric: "wear:wearable.battery_level" },
+  // { service: "smartphone-screen", metric: "wear:smartphone.screen" },
+  // { service: "environment-blind", metric: "act:environment.blind" },
+  // { service: "wearable-on-wrist", metric: "wear:wearable.on_wrist" },
+  // { service: "smartphone-location-accuracy", metric: "wear:smartphone.location.accuracy" },
+  // { service: "smartphone-location-altitude", metric: "wear:smartphone.location.altitude" },
+  // { service: "smartphone-location-bearing", metric: "wear:smartphone.location.bearing" },
+  // { service: "smartphone-location-latitude", metric: "wear:smartphone.location.latitude" },
+  // { service: "smartphone-location-longitude", metric: "wear:smartphone.location.longitude" },
+  // { service: "environment-dimmer", metric: "act:environment.dimmer" },
+  // { service: "heart-rate", metric: "wear:org.dyamand.types.health.HeartRate" },
+  // { service: "spo2", metric: "wear:org.dyamand.types.health.SpO2" },
+  // { service: "load", metric: "act:org.dyamand.types.common.Load" },
   { service: "body-temperature", metric: "wear:org.dyamand.types.health.BodyTemperature" },
   { service: "diastolic-blood-pressure", metric: "wear:org.dyamand.types.health.DiastolicBloodPressure" },
   { service: "systolic-blood-pressure", metric: "wear:org.dyamand.types.health.SystolicBloodPressure" },
+  { service: "wearable-bvp", metric: "wear:wearable.bvp" },
+  { service: "wearable-gsr", metric: "wear:wearable.gsr" },
+  { service: "wearable-skt", metric: "wear:wearable.skt" },
+  { service: "wearable-ibi", metric: "wear:wearable.ibi" },
+];
+
+const SAMPLED_SERVICES: ServiceDefinition[] = [
+  // { service: "wearable-bvp", metric: "wear:wearable.bvp" },
+  // { service: "wearable-gsr", metric: "wear:wearable.gsr" },
+  // { service: "wearable-skt", metric: "wear:wearable.skt" },
+  // { service: "wearable-ibi", metric: "wear:wearable.ibi" },
 ];
 
 const SOURCES = [
@@ -172,13 +179,40 @@ WHERE {
 `;
 }
 
+function sampledMetricQuery(metric: string): string {
+  return `
+PREFIX saref: <https://saref.etsi.org/core/>
+PREFIX void: <http://rdfs.org/ns/void#>
+PREFIX wear: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndWearables/>
+PREFIX act: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndActuators/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?dataset ?year ?month ?day ?hour ?minuteBucket (SAMPLE(?timestamp) AS ?timestamp) (SAMPLE(?value) AS ?value)
+WHERE {
+  ?obs saref:observes ${toSparqlMetric(metric)} ;
+       saref:hasTimestamp ?timestamp ;
+       saref:hasValue ?value ;
+       void:inDataset ?dataset .
+
+  BIND(YEAR(?timestamp) AS ?year)
+  BIND(MONTH(?timestamp) AS ?month)
+  BIND(DAY(?timestamp) AS ?day)
+  BIND(HOURS(?timestamp) AS ?hour)
+  BIND((FLOOR(MINUTES(?timestamp) / 5) * 5) AS ?minuteBucket)
+}
+GROUP BY ?dataset ?year ?month ?day ?hour ?minuteBucket
+ORDER BY ?dataset ?year ?month ?day ?hour ?minuteBucket
+`;
+}
+
 async function createService(
   umaFetch: ReturnType<KeycloakOIDCAuth["createUMAFetch"]>,
   name: string,
-  metric: string
+  metric: string,
+  query: string
 ) {
   const params = {
-    query: metricQuery(metric),
+    query,
     sources: SOURCES,
     schema: SCHEMA,
     context: CONTEXT,
@@ -251,8 +285,10 @@ async function parseServiceRequest(
 }
 
 async function main() {
-  if (SERVICES.length === 0) {
-    throw new Error("SERVICES is empty. Add at least one service definition.");
+  const totalServices = RAW_SERVICES.length + SAMPLED_SERVICES.length;
+
+  if (totalServices === 0) {
+    throw new Error("No services configured. Add at least one service definition.");
   }
 
   const auth = new KeycloakOIDCAuth();
@@ -266,11 +302,17 @@ async function main() {
 
   const umaFetch = auth.createUMAFetch();
 
-  for (const { service, metric } of SERVICES) {
-    await createService(umaFetch, service, metric);
+  for (const { service, metric } of RAW_SERVICES) {
+    await createService(umaFetch, service, metric, metricQuery(metric));
   }
 
-  console.log(`=== Created ${SERVICES.length} services ===`);
+  for (const { service, metric } of SAMPLED_SERVICES) {
+    await createService(umaFetch, service, metric, sampledMetricQuery(metric));
+  }
+
+  console.log(
+    `=== Created ${totalServices} services (${RAW_SERVICES.length} raw, ${SAMPLED_SERVICES.length} sampled) ===`
+  );
 }
 
 main().catch((error) => {

@@ -29,7 +29,7 @@ PREFIX wear: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndWearables/>
 
 SELECT ?dataset ?timestamp ?value
 WHERE {
- ?obs  saref:observes wear:org.dyamand.types.health.SystolicBloodPressure ;
+ ?obs  saref:observes wear:smartphone.step ;
        saref:hasTimestamp ?timestamp ;
        saref:hasValue ?value ;
        void:inDataset ?dataset .
@@ -37,18 +37,25 @@ WHERE {
 `,
 //     query: `
 // PREFIX saref: <https://saref.etsi.org/core/>
+// PREFIX void: <http://rdfs.org/ns/void#>
 // PREFIX wear: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndWearables/>
+// PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 //
-// SELECT ?obs ?timestamp ?value ?madeBy
+// SELECT ?dataset ?year ?month ?day ?hour ?minuteBucket (SAMPLE(?timestamp) AS ?timestamp) (SAMPLE(?value) AS ?value)
 // WHERE {
-//   ?obs saref:observes wear:org.dyamand.types.health.SystolicBloodPressure ;
+//   ?obs saref:observes wear:wearable.gsr ;
 //        saref:hasTimestamp ?timestamp ;
-//        saref:hasValue ?value .
-//   OPTIONAL {
-//     ?obs saref:madeBy ?madeBy .
-//   }
+//        saref:hasValue ?value ;
+//        void:inDataset ?dataset .
+//
+//   BIND(YEAR(?timestamp) AS ?year)
+//   BIND(MONTH(?timestamp) AS ?month)
+//   BIND(DAY(?timestamp) AS ?day)
+//   BIND(HOURS(?timestamp) AS ?hour)
+//   BIND((FLOOR(MINUTES(?timestamp) / 5) * 5) AS ?minuteBucket)
 // }
-// LIMIT 20
+// GROUP BY ?dataset ?year ?month ?day ?hour ?minuteBucket
+// ORDER BY ?dataset ?year ?month ?day ?hour ?minuteBucket
 // `,
 //     query: `
 // PREFIX saref: <https://saref.etsi.org/core/>

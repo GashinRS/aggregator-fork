@@ -1,6 +1,17 @@
 import { QueryEngine } from "@incremunica/query-sparql-incremental";
 import { isAddition } from '@incremunica/user-tools';
 import { Mutex } from "async-mutex";
+import { logMeasurement, viewRowCount } from "./measurement.js";
+
+const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
+const MEASUREMENT_LOG_INTERVAL_MS = parseInt(process.env.MEASUREMENT_LOG_INTERVAL_MS || "1000", 10);
+
+interface StreamCounters {
+  totalAdds: number;
+  totalRemoves: number;
+  changedSinceLastLog: boolean;
+  lastLogAt: number;
+}
 
 export async function querySources(
   endpoints: string[],
@@ -12,6 +23,12 @@ export async function querySources(
 ) {
   console.log("[QUERY] Initializing QueryEngine...");
   const engine = new QueryEngine();
+  const counters: StreamCounters = {
+    totalAdds: 0,
+    totalRemoves: 0,
+    changedSinceLastLog: false,
+    lastLogAt: 0,
+  };
 
   console.log(`[QUERY] Preparing ${endpoints.length} endpoints`);
   const sources = endpoints.map(endpoint => {
@@ -26,23 +43,50 @@ export async function querySources(
     }
   });
 
-  const handleBinding = async (b: any) => {
+  const emitViewUpdate = (source?: string) => {
+    const now = Date.now();
+    if (!counters.changedSinceLastLog) return;
+    if (now - counters.lastLogAt < MEASUREMENT_LOG_INTERVAL_MS) return;
+
+    counters.lastLogAt = now;
+    counters.changedSinceLastLog = false;
+
+    logMeasurement({
+      stage: "t6",
+      event: "view_update",
+      source,
+      view_unique: view.size,
+      view_rows: viewRowCount(view),
+      total_adds: counters.totalAdds,
+      total_removes: counters.totalRemoves,
+    });
+  };
+
+  const handleBinding = async (b: any, source?: string) => {
     const key = b.toString();
     const addition = isAddition(b);
 
-    console.log(`[STREAM] ${addition ? "ADD" : "REMOVE"} event: ${key}`);
+    if (DEBUG_STREAM_EVENTS) {
+      console.log(`[STREAM] ${addition ? "ADD" : "REMOVE"} event: ${key}`);
+    }
 
     if (addition) {
       if (view.has(key)) {
         await mutex.runExclusive(() => {
           const entry = view.get(key)!;
           entry.count++;
+          counters.totalAdds++;
+          counters.changedSinceLastLog = true;
           console.log(`[VIEW] Incremented count (${entry.count}) for key`);
+          emitViewUpdate(source);
         });
       } else {
         await mutex.runExclusive(() => {
           view.set(key, { bindings: b, count: 1 });
+          counters.totalAdds++;
+          counters.changedSinceLastLog = true;
           console.log("[VIEW] Added new entry with count=1");
+          emitViewUpdate(source);
         });
       }
     } else {
@@ -50,12 +94,15 @@ export async function querySources(
         if (view.has(key)) {
           const existingElement = view.get(key)!;
           existingElement.count--;
+          counters.totalRemoves++;
+          counters.changedSinceLastLog = true;
           console.log(`[VIEW] Decremented count (${existingElement.count})`);
 
           if (existingElement.count <= 0) {
             view.delete(key);
             console.log("[VIEW] Entry removed (count <= 0)");
           }
+          emitViewUpdate(source);
         } else {
           console.error("[ERROR] Removal received for non-existing key:", key);
         }
@@ -71,15 +118,38 @@ export async function querySources(
     });
 
     console.log(`[STREAM] Query stream started for source: ${source.value}`);
+    logMeasurement({
+      stage: "t6",
+      event: "stream_started",
+      source: source.value,
+      source_count: sources.length,
+    });
 
-    bindingsStream.on('data', handleBinding);
+    bindingsStream.on('data', (binding) => {
+      void handleBinding(binding, source.value);
+    });
 
     bindingsStream.on('end', () => {
       console.log(`[STREAM] Query stream ended for source: ${source.value}`);
+      logMeasurement({
+        stage: "t6",
+        event: "stream_ended",
+        source: source.value,
+        view_unique: view.size,
+        view_rows: viewRowCount(view),
+        total_adds: counters.totalAdds,
+        total_removes: counters.totalRemoves,
+      });
     });
 
     bindingsStream.on('error', (err) => {
       console.error(`[STREAM] Error during query execution for ${source.value}:`, err);
+      logMeasurement({
+        stage: "t6",
+        event: "stream_error",
+        source: source.value,
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
   }));
 }

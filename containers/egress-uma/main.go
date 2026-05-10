@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"egress-uma/model"
 
@@ -126,10 +128,35 @@ func handleFetchRequest(w http.ResponseWriter, r *http.Request) {
 	// Log outbound request headers
 	model.LogHeaders("Outbound request headers", outReq.Header)
 
+	isSSE := strings.Contains(outReq.Header.Get("Accept"), "text/event-stream")
+	var flusher http.Flusher
+	if isSSE {
+		var ok bool
+		flusher, ok = w.(http.Flusher)
+		if !ok {
+			logrus.Error("ResponseWriter does not implement Flusher")
+			http.Error(w, "Streaming responses are not supported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(": connecting\n\n"))
+		flusher.Flush()
+	}
+
 	// Send request using UMA proxy
 	resp, err := RequestWithUMA(model.HttpClient, outReq)
 	if err != nil {
 		logrus.WithError(err).Error("UMA fetch failed")
+		if isSSE {
+			_, _ = fmt.Fprintf(w, "event: error\ndata: %q\n\n", "UMA fetch failed: "+err.Error())
+			flusher.Flush()
+			return
+		}
 		http.Error(w, "UMA fetch failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -141,27 +168,37 @@ func handleFetchRequest(w http.ResponseWriter, r *http.Request) {
 	model.LogHeaders("Upstream response headers", resp.Header)
 
 	// --- Forward upstream headers to downstream
-	for k, v := range resp.Header {
-		for _, vv := range v {
-			w.Header().Add(k, vv)
+	if !isSSE {
+		for k, v := range resp.Header {
+			for _, vv := range v {
+				w.Header().Add(k, vv)
+			}
 		}
-	}
 
-	// Ensure SSE headers are present if upstream sent text/event-stream
-	if resp.Header.Get("Content-Type") == "text/event-stream" {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-	}
+		// Ensure SSE headers are present if upstream sent text/event-stream
+		if resp.Header.Get("Content-Type") == "text/event-stream" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+		}
 
-	w.WriteHeader(resp.StatusCode)
+		w.WriteHeader(resp.StatusCode)
+	} else if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		logrus.WithField("status", resp.StatusCode).Warn("Upstream SSE request returned non-2xx status")
+		_, _ = fmt.Fprintf(w, "event: error\ndata: %q\n\n", fmt.Sprintf("Upstream returned status %d", resp.StatusCode))
+		flusher.Flush()
+		return
+	}
 
 	logrus.Debug("Starting to stream response body to downstream")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		logrus.Error("ResponseWriter does not implement Flusher")
-		return
+	if flusher == nil {
+		var ok bool
+		flusher, ok = w.(http.Flusher)
+		if !ok {
+			logrus.Error("ResponseWriter does not implement Flusher")
+			return
+		}
 	}
 
 	buf := make([]byte, 1024)
