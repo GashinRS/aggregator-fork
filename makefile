@@ -111,6 +111,7 @@ kind-start-traefik:
 	@helm repo add aggregator-traefik https://traefik.github.io/charts || true
 	@helm repo update
 	@helm upgrade --install aggregator-traefik aggregator-traefik/traefik \
+        --version 26.1.0 \
 		--namespace aggregator-traefik --create-namespace \
 		--set ingressClass.enabled=true \
 		--set ingressClass.name=aggregator-traefik \
