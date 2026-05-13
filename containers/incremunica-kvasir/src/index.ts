@@ -92,6 +92,8 @@ async function main() {
         logMeasurement({
           stage: "service_read",
           event: "http_result",
+          pod: "all",
+          observations: rows,
           request_ip: request.ip,
           view_unique: view.size,
           view_rows: viewRowCount(view),
@@ -107,6 +109,8 @@ async function main() {
         logMeasurement({
           stage: "service_read",
           event: "http_error",
+          pod: "all",
+          observations: viewRowCount(view),
           request_ip: request.ip,
           error: err instanceof Error ? err.message : String(err),
         });

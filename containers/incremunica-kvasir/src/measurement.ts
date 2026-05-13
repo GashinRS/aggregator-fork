@@ -3,6 +3,8 @@ export interface MeasurementEvent {
   event: string;
   service: string;
   run_id: string;
+  pod: string;
+  observations: number;
   ts?: string;
   [key: string]: unknown;
 }

@@ -94,6 +94,48 @@ function parseRowCount(body: string): number | null {
   }
 }
 
+interface SparqlBindingValue {
+  value?: unknown;
+}
+
+type SparqlResultRow = Record<string, SparqlBindingValue | undefined>;
+
+function datasetValue(row: SparqlResultRow): string | undefined {
+  const exactBinding = row.dataset ?? row.inDataset ?? row.void_inDataset;
+  if (typeof exactBinding?.value === "string" && exactBinding.value) {
+    return exactBinding.value;
+  }
+
+  for (const [key, binding] of Object.entries(row)) {
+    if (key.toLowerCase().includes("dataset") && typeof binding?.value === "string" && binding.value) {
+      return binding.value;
+    }
+  }
+
+  return undefined;
+}
+
+function parseObservationCounts(body: string): { total: number | null; byPod: Map<string, number> } {
+  const byPod = new Map<string, number>();
+
+  try {
+    const parsed = JSON.parse(body);
+    const bindings = parsed?.results?.bindings;
+    if (!Array.isArray(bindings)) return { total: null, byPod };
+
+    for (const row of bindings) {
+      if (!row || typeof row !== "object") continue;
+
+      const pod = datasetValue(row as SparqlResultRow) ?? "unknown";
+      byPod.set(pod, (byPod.get(pod) ?? 0) + 1);
+    }
+
+    return { total: bindings.length, byPod };
+  } catch {
+    return { total: null, byPod };
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -159,6 +201,7 @@ async function pollEndpoint(
   let status = 0;
   let responseBytes = 0;
   let rows: number | null = null;
+  let observationsByPod = new Map<string, number>();
   let jsonParseMs: number | null = null;
   let error: string | undefined;
 
@@ -176,14 +219,16 @@ async function pollEndpoint(
 
     if (!opts.description) {
       const parseStarted = performance.now();
-      rows = parseRowCount(body);
+      const observationCounts = parseObservationCounts(body);
+      rows = observationCounts.total ?? parseRowCount(body);
+      observationsByPod = observationCounts.byPod;
       jsonParseMs = Math.round((performance.now() - parseStarted) * 1000) / 1000;
     }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
 
-  logMeasurement(opts, {
+  const commonEvent = {
     run_id: opts.runId,
     stage: opts.description ? "service_description_read" : "t7",
     event: "poll_result",
@@ -203,7 +248,23 @@ async function pollEndpoint(
     rows,
     json_parse_ms: jsonParseMs,
     error,
-  });
+  };
+
+  if (observationsByPod.size > 0) {
+    for (const [pod, observations] of observationsByPod) {
+      logMeasurement(opts, {
+        ...commonEvent,
+        pod,
+        observations,
+      });
+    }
+  } else {
+    logMeasurement(opts, {
+      ...commonEvent,
+      pod: opts.description ? endpoint : "unknown",
+      observations: rows ?? 0,
+    });
+  }
 }
 
 async function main() {

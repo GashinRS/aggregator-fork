@@ -20,6 +20,7 @@ interface StreamCounters {
   totalRemoves: number;
   changedSinceLastLog: boolean;
   lastLogAt: number;
+  observationsBySource: Map<string, number>;
 }
 
 export async function querySources(
@@ -37,6 +38,7 @@ export async function querySources(
     totalRemoves: 0,
     changedSinceLastLog: false,
     lastLogAt: 0,
+    observationsBySource: new Map(),
   };
 
   console.log(`[QUERY] Preparing ${endpoints.length} endpoints`);
@@ -63,6 +65,8 @@ export async function querySources(
     logMeasurement({
       stage: "t6",
       event: "view_update",
+      pod: source ?? "all",
+      observations: source ? (counters.observationsBySource.get(source) ?? 0) : viewRowCount(view),
       source,
       view_unique: view.size,
       view_rows: viewRowCount(view),
@@ -85,6 +89,9 @@ export async function querySources(
           const entry = view.get(key)!;
           entry.count++;
           counters.totalAdds++;
+          if (source) {
+            counters.observationsBySource.set(source, (counters.observationsBySource.get(source) ?? 0) + 1);
+          }
           counters.changedSinceLastLog = true;
           console.log(`[VIEW] Incremented count (${entry.count}) for key`);
           emitViewUpdate(source);
@@ -93,6 +100,9 @@ export async function querySources(
         await mutex.runExclusive(() => {
           view.set(key, { bindings: b, count: 1 });
           counters.totalAdds++;
+          if (source) {
+            counters.observationsBySource.set(source, (counters.observationsBySource.get(source) ?? 0) + 1);
+          }
           counters.changedSinceLastLog = true;
           console.log("[VIEW] Added new entry with count=1");
           emitViewUpdate(source);
@@ -104,6 +114,9 @@ export async function querySources(
           const existingElement = view.get(key)!;
           existingElement.count--;
           counters.totalRemoves++;
+          if (source) {
+            counters.observationsBySource.set(source, Math.max(0, (counters.observationsBySource.get(source) ?? 0) - 1));
+          }
           counters.changedSinceLastLog = true;
           console.log(`[VIEW] Decremented count (${existingElement.count})`);
 
@@ -133,6 +146,8 @@ export async function querySources(
       logMeasurement({
         stage: "t6",
         event: "stream_start_error",
+        pod: source.value,
+        observations: counters.observationsBySource.get(source.value) ?? 0,
         source: source.value,
         reconnect_attempt: reconnectAttempt,
         error: err instanceof Error ? err.message : String(err),
@@ -145,6 +160,8 @@ export async function querySources(
     logMeasurement({
       stage: "t6",
       event: "stream_started",
+      pod: source.value,
+      observations: counters.observationsBySource.get(source.value) ?? 0,
       source: source.value,
       source_count: sources.length,
       reconnect_attempt: reconnectAttempt,
@@ -164,6 +181,8 @@ export async function querySources(
         logMeasurement({
           stage: "t6",
           event: "stream_error",
+          pod: source.value,
+          observations: counters.observationsBySource.get(source.value) ?? 0,
           source: source.value,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -172,6 +191,8 @@ export async function querySources(
         logMeasurement({
           stage: "t6",
           event: "stream_ended",
+          pod: source.value,
+          observations: counters.observationsBySource.get(source.value) ?? 0,
           source: source.value,
           view_unique: view.size,
           view_rows: viewRowCount(view),
@@ -202,6 +223,8 @@ export async function querySources(
     logMeasurement({
       stage: "t6",
       event: "stream_reconnect_scheduled",
+      pod: source.value,
+      observations: counters.observationsBySource.get(source.value) ?? 0,
       source: source.value,
       reconnect_attempt: reconnectAttempt,
       reconnect_delay_ms: delay,
