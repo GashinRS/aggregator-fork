@@ -77,6 +77,16 @@ func RequestWithUMA(client *http.Client, r *http.Request) (*http.Response, error
 	defer resp.Body.Close()
 
 	wwwAuth := resp.Header.Get("WWW-Authenticate")
+
+	bodyPreview, _ := io.ReadAll(resp.Body)
+    logrus.WithFields(logrus.Fields{
+        "status": resp.StatusCode,
+        "www_authenticate": wwwAuth,
+        "body": string(bodyPreview),
+    }).Warn("Initial request did not succeed")
+
+    resp.Body = io.NopCloser(bytes.NewReader(bodyPreview))
+
 	if wwwAuth == "" {
 		logrus.Warn("No WWW-Authenticate header present; returning original response")
 		return resp, nil
