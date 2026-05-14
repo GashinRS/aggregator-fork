@@ -11,12 +11,15 @@
 # Aggregator deployment
 # ------------------------
 
+HELM_TRUST_CA_ARGS = $(if $(TRUST_CA_FILE),--set trust.ca.enabled=true --set-file trust.ca.bundle=$(TRUST_CA_FILE),)
+
 deploy:
 	@echo "📄 Deploying aggregator application..."
 	@helm upgrade --install aggregator-platform ./aggregator-platform -f $(CONFIG) \
 		-n aggregator-platform --create-namespace \
 		--set-file tls.selfSigned.crt=aggregator.local.pem \
-  	--set-file tls.selfSigned.key=aggregator.local-key.pem
+  	--set-file tls.selfSigned.key=aggregator.local-key.pem \
+		$(HELM_TRUST_CA_ARGS)
 	@kubectl rollout status deployment aggregator-server -n aggregator-platform --timeout=120s
 	@echo "✅ Aggregator application successfully deployed!"
 
