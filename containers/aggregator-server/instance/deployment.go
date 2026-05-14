@@ -164,7 +164,7 @@ func ensureDeployment(
 							Ports: []corev1.ContainerPort{
 								{ContainerPort: 5000},
 							},
-							Env: []corev1.EnvVar{
+							Env: append([]corev1.EnvVar{
 								{Name: "PROTOCOL", Value: model.Protocol},
 								{Name: "EXTERNAL_HOST", Value: model.ExternalHost},
 								{Name: "EXTERNAL_HTTP_PORT", Value: model.ExternalHttpPort},
@@ -177,14 +177,14 @@ func ensureDeployment(
 								{Name: "PROVISION_ID", Value: provisionId},
 								{Name: "TRANSFORMATION_CATALOG", Value: model.TransformationCatalog},
 								{Name: "SERVICE_COLLECTION", Value: model.ServiceCollection},
-							},
-							VolumeMounts: []corev1.VolumeMount{
+							}, trustCAEnvVars(true)...),
+							VolumeMounts: append([]corev1.VolumeMount{
 								{
 									Name:      configName,
 									MountPath: "/etc/config",
 									ReadOnly:  true,
 								},
-							},
+							}, trustCAVolumeMounts()...),
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
@@ -199,7 +199,7 @@ func ensureDeployment(
 							},
 						},
 					},
-					Volumes: []corev1.Volume{
+					Volumes: append([]corev1.Volume{
 						{
 							Name: configName,
 							VolumeSource: corev1.VolumeSource{
@@ -210,7 +210,7 @@ func ensureDeployment(
 								},
 							},
 						},
-					},
+					}, trustCAVolumes()...),
 				},
 			},
 		},

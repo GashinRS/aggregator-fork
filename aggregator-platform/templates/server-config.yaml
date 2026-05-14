@@ -31,3 +31,10 @@ data:
   {{- if .Values.tls.enabled }}
   TLS_SECRET: {{ .Values.tls.secretName }}
   {{- end }}
+  {{- if .Values.trust.ca.enabled }}
+  TRUST_CA_CONFIGMAP_NAME: {{ .Values.trust.ca.configMapName | quote }}
+  TRUST_CA_MOUNT_PATH: {{ .Values.trust.ca.mountPath | quote }}
+  TRUST_CA_CERT_KEY: {{ .Values.trust.ca.key | quote }}
+  SSL_CERT_FILE: {{ printf "%s/%s" .Values.trust.ca.mountPath .Values.trust.ca.key | quote }}
+  NODE_EXTRA_CA_CERTS: {{ printf "%s/%s" .Values.trust.ca.mountPath .Values.trust.ca.key | quote }}
+  {{- end }}

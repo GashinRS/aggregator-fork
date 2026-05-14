@@ -34,8 +34,22 @@ spec:
                 name: server-config
             - configMapRef:
                 name: spec-config
-          {{- if or .Values.auth.oidc.clientSecret .Values.auth.client_credentials.clientSecret }}
+          {{- if .Values.trust.ca.enabled }}
+          env:
+            - name: SSL_CERT_FILE
+              value: {{ printf "%s/%s" .Values.trust.ca.mountPath .Values.trust.ca.key | quote }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: {{ printf "%s/%s" .Values.trust.ca.mountPath .Values.trust.ca.key | quote }}
+          {{- end }}
+          {{- if .Values.trust.ca.enabled }}
           volumeMounts:
+            - name: pacsoi-ca
+              mountPath: {{ .Values.trust.ca.mountPath | quote }}
+              readOnly: true
+          {{- else if or .Values.auth.oidc.clientSecret .Values.auth.client_credentials.clientSecret }}
+          volumeMounts:
+          {{- end }}
+          {{- if or .Values.auth.oidc.clientSecret .Values.auth.client_credentials.clientSecret }}
             - name: client-secrets
               mountPath: /etc/secrets
               readOnly: true
@@ -48,9 +62,16 @@ spec:
             periodSeconds: {{ .Values.server.readinessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.server.readinessProbe.timeoutSeconds }}
             failureThreshold: {{ .Values.server.readinessProbe.failureThreshold }}
-      {{- if or .Values.auth.oidc.clientSecret .Values.auth.client_credentials.clientSecret }}
+      {{- if or .Values.trust.ca.enabled .Values.auth.oidc.clientSecret .Values.auth.client_credentials.clientSecret }}
       volumes:
+      {{- if .Values.trust.ca.enabled }}
+        - name: pacsoi-ca
+          configMap:
+            name: {{ .Values.trust.ca.configMapName }}
+      {{- end }}
+      {{- if or .Values.auth.oidc.clientSecret .Values.auth.client_credentials.clientSecret }}
         - name: client-secrets
           secret:
             secretName: aggregator-server-secret
+      {{- end }}
       {{- end }}

@@ -63,4 +63,13 @@ tokenService:
 tls:
   enabled: false
 
+trust:
+  ca:
+    enabled: false
+    create: true
+    configMapName: pacsoi-ca
+    key: ca.crt
+    mountPath: /etc/ssl/pacsoi-ca
+    bundle: ""
+
 ingressClassName: ""

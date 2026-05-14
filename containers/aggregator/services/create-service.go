@@ -81,7 +81,8 @@ func createDeployment(
 		Name:            service.InstanceID,
 		Image:           image,
 		ImagePullPolicy: corev1.PullNever,
-		Env:             envVars,
+		Env:             append(trustCAEnvVars(), envVars...),
+		VolumeMounts:    trustCAVolumeMounts(),
 		Ports: []corev1.ContainerPort{
 			{ContainerPort: 8080},
 		},
@@ -115,6 +116,7 @@ func createDeployment(
 				},
 				Spec: corev1.PodSpec{
 					Containers:    []corev1.Container{container},
+					Volumes:       trustCAVolumes(),
 					RestartPolicy: corev1.RestartPolicyAlways,
 				},
 			},

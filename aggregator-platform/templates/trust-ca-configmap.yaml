@@ -1,0 +1,14 @@
+{{- if and .Values.trust.ca.enabled .Values.trust.ca.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.trust.ca.configMapName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aggregator.labels" $ | nindent 4 }}
+  annotations:
+    {{- include "aggregator.annotations" $ | nindent 4 }}
+data:
+  {{ .Values.trust.ca.key }}: |-
+{{ .Values.trust.ca.bundle | indent 4 }}
+{{- end }}

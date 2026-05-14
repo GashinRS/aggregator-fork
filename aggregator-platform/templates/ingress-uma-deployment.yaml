@@ -43,3 +43,21 @@ spec:
               value: "{{ .Values.ingressUma.disableAuth }}"
             - name: CLIENT_ID
               value: "{{ .Values.auth.clientId }}"
+            {{- if .Values.trust.ca.enabled }}
+            - name: SSL_CERT_FILE
+              value: {{ printf "%s/%s" .Values.trust.ca.mountPath .Values.trust.ca.key | quote }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: {{ printf "%s/%s" .Values.trust.ca.mountPath .Values.trust.ca.key | quote }}
+            {{- end }}
+          {{- if .Values.trust.ca.enabled }}
+          volumeMounts:
+            - name: pacsoi-ca
+              mountPath: {{ .Values.trust.ca.mountPath | quote }}
+              readOnly: true
+          {{- end }}
+      {{- if .Values.trust.ca.enabled }}
+      volumes:
+        - name: pacsoi-ca
+          configMap:
+            name: {{ .Values.trust.ca.configMapName }}
+      {{- end }}
