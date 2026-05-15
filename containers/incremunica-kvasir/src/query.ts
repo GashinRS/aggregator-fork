@@ -9,6 +9,7 @@ const MEASUREMENT_LOG_INTERVAL_MS = parseInt(process.env.MEASUREMENT_LOG_INTERVA
 const STREAM_RECONNECT_INITIAL_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_INITIAL_DELAY_MS || "1000", 10);
 const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_DELAY_MS || "30000", 10);
 const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_BACKOFF_FACTOR || "2");
+const STREAM_FIRST_DATA_TIMEOUT_MS = parseInt(process.env.STREAM_FIRST_DATA_TIMEOUT_MS || "300000", 10);
 
 const streamingDispatcher = new Agent({
   bodyTimeout: 0,
@@ -238,14 +239,20 @@ export async function querySources(
       reconnect_attempt: reconnectAttempt,
     });
 
-    bindingsStream.on('data', (binding) => {
-      void handleBinding(binding, source.value);
-    });
-
     let reconnectScheduled = false;
-    const closeAndReconnect = (reason: "end" | "error", err?: unknown) => {
+    let firstDataReceived = false;
+    let firstDataTimeout: ReturnType<typeof setTimeout> | undefined;
+
+    const clearFirstDataTimeout = () => {
+      if (!firstDataTimeout) return;
+      clearTimeout(firstDataTimeout);
+      firstDataTimeout = undefined;
+    };
+
+    const closeAndReconnect = (reason: "end" | "error" | "idle", err?: unknown) => {
       if (reconnectScheduled) return;
       reconnectScheduled = true;
+      clearFirstDataTimeout();
 
       if (reason === "error") {
         console.error(`[STREAM] Error during query execution for ${source.value}:`, err);
@@ -256,6 +263,17 @@ export async function querySources(
           observations: counters.observationsBySource.get(source.value) ?? 0,
           source: source.value,
           error: err instanceof Error ? err.message : String(err),
+        });
+      } else if (reason === "idle") {
+        console.warn(`[STREAM] No data received for ${source.value} within ${STREAM_FIRST_DATA_TIMEOUT_MS}ms, reconnecting`);
+        logMeasurement({
+          stage: "t6",
+          event: "stream_idle_timeout",
+          pod: source.value,
+          observations: counters.observationsBySource.get(source.value) ?? 0,
+          source: source.value,
+          reconnect_attempt: reconnectAttempt,
+          idle_timeout_ms: STREAM_FIRST_DATA_TIMEOUT_MS,
         });
       } else {
         console.log(`[STREAM] Query stream ended for source: ${source.value}`);
@@ -275,6 +293,14 @@ export async function querySources(
       scheduleReconnect(source, reconnectAttempt + 1);
     };
 
+    bindingsStream.on('data', (binding) => {
+      if (!firstDataReceived) {
+        firstDataReceived = true;
+        clearFirstDataTimeout();
+      }
+      void handleBinding(binding, source.value);
+    });
+
     bindingsStream.on('end', () => {
       closeAndReconnect("end");
     });
@@ -282,6 +308,16 @@ export async function querySources(
     bindingsStream.on('error', (err) => {
       closeAndReconnect("error", err);
     });
+
+    if (STREAM_FIRST_DATA_TIMEOUT_MS > 0) {
+      firstDataTimeout = setTimeout(() => {
+        const destroy = (bindingsStream as { destroy?: (error?: Error) => void }).destroy;
+        if (typeof destroy === "function") {
+          destroy.call(bindingsStream, new Error(`Stream first data timeout after ${STREAM_FIRST_DATA_TIMEOUT_MS}ms`));
+        }
+        closeAndReconnect("idle");
+      }, STREAM_FIRST_DATA_TIMEOUT_MS);
+    }
   };
 
   const scheduleReconnect = (source: typeof sources[number], reconnectAttempt: number) => {
@@ -360,14 +396,14 @@ export function materializedViewToSparqlJson(view: Map<string,{bindings: any, co
   };
 }
 
-// Retry configuration for UMA permission errors
+// Retry configuration for transient UMA/proxy errors
 const RETRY_MAX_ATTEMPTS = parseInt(process.env.UMA_RETRY_MAX_ATTEMPTS || "10", 10);
 const RETRY_INITIAL_DELAY_MS = parseInt(process.env.UMA_RETRY_INITIAL_DELAY_MS || "1000", 10);
 const RETRY_MAX_DELAY_MS = parseInt(process.env.UMA_RETRY_MAX_DELAY_MS || "30000", 10);
 const RETRY_BACKOFF_FACTOR = parseFloat(process.env.UMA_RETRY_BACKOFF_FACTOR || "2");
 
 function isRetryableStatus(status: number): boolean {
-  return status === 401 || status === 403;
+  return status === 401 || status === 403 || status === 502 || status === 503 || status === 504;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -478,8 +514,7 @@ async function umaProxyFetch(input: RequestInfo | URL, init?: RequestInit): Prom
       return response;
     }
 
-    // Retryable error — wait and try again
-    console.log(`[FETCH] Permission not yet granted for ${originalUrl}, retrying in ${delay}ms (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS})`);
+    console.log(`[FETCH] Retryable proxy response for ${originalUrl}, retrying in ${delay}ms (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS}, status: ${response.status})`);
     await sleep(delay);
 
     attempt++;
