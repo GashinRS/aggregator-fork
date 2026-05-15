@@ -18,6 +18,7 @@ const streamingDispatcher = new Agent({
 interface StreamCounters {
   totalAdds: number;
   totalRemoves: number;
+  sourceResets: number;
   changedSinceLastLog: boolean;
   lastLogAt: number;
   observationsBySource: Map<string, number>;
@@ -36,10 +37,12 @@ export async function querySources(
   const counters: StreamCounters = {
     totalAdds: 0,
     totalRemoves: 0,
+    sourceResets: 0,
     changedSinceLastLog: false,
     lastLogAt: 0,
     observationsBySource: new Map(),
   };
+  const sourceContributions = new Map<string, Map<string, number>>();
 
   console.log(`[QUERY] Preparing ${endpoints.length} endpoints`);
   const sources = endpoints.map(endpoint => {
@@ -72,6 +75,49 @@ export async function querySources(
       view_rows: viewRowCount(view),
       total_adds: counters.totalAdds,
       total_removes: counters.totalRemoves,
+      source_resets: counters.sourceResets,
+    });
+  };
+
+  const resetSourceView = async (source: string, reconnectAttempt: number) => {
+    const contributions = sourceContributions.get(source);
+    if (!contributions || contributions.size === 0) return;
+
+    await mutex.runExclusive(() => {
+      let removedRows = 0;
+
+      for (const [key, count] of contributions) {
+        const entry = view.get(key);
+        if (!entry) continue;
+
+        entry.count -= count;
+        removedRows += count;
+
+        if (entry.count <= 0) {
+          view.delete(key);
+        }
+      }
+
+      contributions.clear();
+      counters.observationsBySource.set(source, 0);
+      counters.sourceResets++;
+      counters.changedSinceLastLog = true;
+
+      console.log(`[VIEW] Reset ${removedRows} rows for source before reconnect replay`);
+      logMeasurement({
+        stage: "t6",
+        event: "source_view_reset",
+        pod: source,
+        observations: 0,
+        source,
+        reconnect_attempt: reconnectAttempt,
+        removed_rows: removedRows,
+        view_unique: view.size,
+        view_rows: viewRowCount(view),
+        total_adds: counters.totalAdds,
+        total_removes: counters.totalRemoves,
+        source_resets: counters.sourceResets,
+      });
     });
   };
 
@@ -88,6 +134,11 @@ export async function querySources(
         await mutex.runExclusive(() => {
           const entry = view.get(key)!;
           entry.count++;
+          if (source) {
+            const contributions = sourceContributions.get(source) ?? new Map<string, number>();
+            contributions.set(key, (contributions.get(key) ?? 0) + 1);
+            sourceContributions.set(source, contributions);
+          }
           counters.totalAdds++;
           if (source) {
             counters.observationsBySource.set(source, (counters.observationsBySource.get(source) ?? 0) + 1);
@@ -99,6 +150,11 @@ export async function querySources(
       } else {
         await mutex.runExclusive(() => {
           view.set(key, { bindings: b, count: 1 });
+          if (source) {
+            const contributions = sourceContributions.get(source) ?? new Map<string, number>();
+            contributions.set(key, (contributions.get(key) ?? 0) + 1);
+            sourceContributions.set(source, contributions);
+          }
           counters.totalAdds++;
           if (source) {
             counters.observationsBySource.set(source, (counters.observationsBySource.get(source) ?? 0) + 1);
@@ -113,6 +169,17 @@ export async function querySources(
         if (view.has(key)) {
           const existingElement = view.get(key)!;
           existingElement.count--;
+          if (source) {
+            const contributions = sourceContributions.get(source);
+            const sourceCount = contributions?.get(key) ?? 0;
+            if (contributions && sourceCount > 0) {
+              if (sourceCount === 1) {
+                contributions.delete(key);
+              } else {
+                contributions.set(key, sourceCount - 1);
+              }
+            }
+          }
           counters.totalRemoves++;
           if (source) {
             counters.observationsBySource.set(source, Math.max(0, (counters.observationsBySource.get(source) ?? 0) - 1));
@@ -134,6 +201,10 @@ export async function querySources(
 
   const startSource = async (source: typeof sources[number], reconnectAttempt = 0): Promise<void> => {
     console.log(`[QUERY] Executing query for source: ${source.value}`);
+
+    if (reconnectAttempt > 0) {
+      await resetSourceView(source.value, reconnectAttempt);
+    }
 
     let bindingsStream;
     try {
