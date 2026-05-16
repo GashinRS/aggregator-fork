@@ -2,6 +2,7 @@ import { KeycloakOIDCAuth } from "../util.js";
 import { DataFactory } from "rdf-data-factory";
 import { Writer } from "n3";
 import { config } from "../config.js";
+import { kvasirPatientSources } from "./kvasir-patients.js";
 
 const df = new DataFactory();
 
@@ -10,33 +11,18 @@ const AGGREGATOR = `${config.aggregatorServer}/${config.aggregatorId}`;
 const TF = "/transformations";
 const SVC = "/services";
 const TF_ID = "IncrementalKvasir";
+const CREATED_STATUS_CODES = new Set([201, 202]);
 
 type ServiceDefinition = {
   service: string;
   metric: string;
 };
 
-type KvasirClientSource = {
-  client: string;
-  server: string;
-};
-
 function withoutTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-// Each client can point to a different Kvasir server. If no per-client
-// server is provided, the script falls back to config.kvasirServer.
-const KVASIR_CLIENT_SOURCES: KvasirClientSource[] = [
-  {
-    client: "patient1",
-    server: process.env.KVASIR_SERVER_PATIENT1 ?? config.kvasirServer,
-  },
-  {
-    client: "patient2",
-    server: process.env.KVASIR_SERVER_PATIENT2 ?? config.kvasirServer,
-  },
-];
+const KVASIR_CLIENT_SOURCES = kvasirPatientSources();
 
 // Edit this list to choose which services this script creates.
 // Metrics should already include the correct query token:
@@ -84,7 +70,7 @@ const RAW_SERVICES: ServiceDefinition[] = [
   // { service: "environment-open", metric: "act:environment.open" },
   // { service: "airquality-voc-total", metric: "act:airquality.voc_total" },
   // { service: "smartphone-proximity", metric: "wear:smartphone.proximity" },
-  { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
+  // { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
   // { service: "dyamand-airquality-co2", metric: "act:org.dyamand.types.airquality.CO2" },
   // { service: "atmospheric-pressure", metric: "act:org.dyamand.types.common.AtmosphericPressure" },
   // { service: "loudness", metric: "act:org.dyamand.types.common.Loudness" },
@@ -231,7 +217,7 @@ async function createService(
   name: string,
   metric: string,
   query: string
-) {
+): Promise<void> {
   const params = {
     query,
     sources: SOURCES,
@@ -248,14 +234,18 @@ async function createService(
   });
 
   console.log(`=== Response status for "${name}": ${response.status} ===`);
+  const responseText = await response.text();
 
-  if (response.status !== 202 && response.status !== 201) {
-    throw new Error(
-      `Error creating "${name}": ${response.status}, response: ${await response.text()}`
-    );
+  if (CREATED_STATUS_CODES.has(response.status)) {
+    console.log(responseText);
+    return;
   }
 
-  console.log(await response.text());
+  {
+    throw new Error(
+      `Error creating "${name}": ${response.status}, response: ${responseText}`
+    );
+  }
 }
 
 async function parseServiceRequest(
@@ -322,18 +312,39 @@ async function main() {
   );
 
   const umaFetch = auth.createUMAFetch();
+  let created = 0;
+  const failed: string[] = [];
 
   for (const { service, metric } of RAW_SERVICES) {
-    await createService(umaFetch, service, metric, metricQuery(metric));
+    try {
+      await createService(umaFetch, service, metric, metricQuery(metric));
+      created++;
+    } catch (error) {
+      failed.push(service);
+      console.error(`=== Failed to create "${service}", continuing with next service ===`);
+      console.error(error);
+    }
   }
 
   for (const { service, metric } of SAMPLED_SERVICES) {
-    await createService(umaFetch, service, metric, sampledMetricQuery(metric));
+    try {
+      await createService(umaFetch, service, metric, sampledMetricQuery(metric));
+      created++;
+    } catch (error) {
+      failed.push(service);
+      console.error(`=== Failed to create "${service}", continuing with next service ===`);
+      console.error(error);
+    }
   }
 
   console.log(
-    `=== Created ${totalServices} services (${RAW_SERVICES.length} raw, ${SAMPLED_SERVICES.length} sampled) ===`
+    `=== Finished ${totalServices} services (${created} created, ${failed.length} failed; ${RAW_SERVICES.length} raw, ${SAMPLED_SERVICES.length} sampled) ===`
   );
+
+  if (failed.length > 0) {
+    console.error(`=== Failed services: ${failed.join(", ")} ===`);
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

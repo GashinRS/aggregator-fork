@@ -2,52 +2,31 @@ import { config, umaId } from "../config.js";
 import { KeycloakOIDCAuth } from "../util.js";
 import { KvasirManagement } from "../kvasir/management.js";
 import { createPolicies } from "../kvasir/policies.js";
+import {
+  DEFAULT_PATIENT_PASSWORD,
+  kvasirPatientSources,
+  kvasirServerForPatient,
+} from "./kvasir-patients.js";
 
-type ConfigUserKey = "alice" | "bob" | "patient1" | "patient3" | "patient30" | "patient5" | "patient6";
-
-type OwnerPatientMap = Record<ConfigUserKey, ConfigUserKey[]>;
-type KvasirClientSource = {
-  client: ConfigUserKey;
-  server: string;
+type UserKey = string;
+type UserCredentials = {
+  username: string;
+  password: string;
 };
 
-const DEFAULT_PATIENT_PASSWORD = "pass";
-const umaIdCache = new Map<ConfigUserKey, string>();
+const umaIdCache = new Map<UserKey, string>();
+const KVASIR_CLIENT_SOURCES = kvasirPatientSources();
+const numberedPatients = Array.from({ length: 30 }, (_, index) => `patient${index + 1}`);
+const evalLowPatients = Array.from({ length: 15 }, (_, index) => `eval-low${index + 1}`);
+const evalMediumPatients = Array.from({ length: 15 }, (_, index) => `eval-medium${index + 1}`);
 
 // Map each aggregator owner to the patients whose slice data they need to query.
-// Add more entries here as new owners/patients are needed.
-const AGGREGATOR_OWNER_PATIENTS: OwnerPatientMap = {
-  patient1: ["patient1", "patient30"],
-  alice: [],
-  bob: [],
-  patient3: [],
-  patient5: ["patient5"],
-  patient6: ["patient6"],
-  patient30: [],
+// Add another owner here if needed; the patient list itself is generated.
+const AGGREGATOR_OWNER_PATIENTS: Record<UserKey, UserKey[]> = {
+  patient1: numberedPatients,
+  "eval-low1": evalLowPatients,
+  "eval-medium1": evalMediumPatients,
 };
-
-const KVASIR_CLIENT_SOURCES: KvasirClientSource[] = [
-  {
-    client: "patient1",
-    server: "https://10.10.220.125",
-  },
-  {
-    client: "patient3",
-    server: "https://10.10.223.39",
-  },
-  {
-    client: "patient5",
-    server: "https://10.10.216.12",
-  },
-  {
-    client: "patient30",
-    server: "https://10.10.221.120",
-  },
-  {
-    client: "patient6",
-    server: "https://10.10.218.59",
-  },
-];
 
 function withoutTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
@@ -62,19 +41,53 @@ function umaServerForPolicyRegistration(): string {
   return base.endsWith("/uma/uma") ? base : `${base}/uma`;
 }
 
-function kvasirServerFor(patient: ConfigUserKey): string {
-  return KVASIR_CLIENT_SOURCES.find(({ client }) => client === patient)?.server ?? config.kvasirServer;
+function configuredCredentials(user: UserKey): UserCredentials | undefined {
+  const maybeConfig = (config as unknown as Record<string, Partial<UserCredentials>>)[user];
+  if (typeof maybeConfig?.username !== "string") {
+    return undefined;
+  }
+
+  return {
+    username: maybeConfig.username,
+    password:
+      typeof maybeConfig.password === "string"
+        ? maybeConfig.password
+        : DEFAULT_PATIENT_PASSWORD,
+  };
 }
 
-function podUrl(patient: ConfigUserKey): string {
-  return `${withoutTrailingSlash(kvasirServerFor(patient))}/${config[patient].username}`;
+function credentialsFor(user: UserKey): UserCredentials {
+  if (/^(patient|eval-low|eval-medium)\d+$/.test(user)) {
+    return {
+      username: configuredCredentials(user)?.username ?? user,
+      password: DEFAULT_PATIENT_PASSWORD,
+    };
+  }
+
+  const configured = configuredCredentials(user);
+  if (configured) {
+    return configured;
+  }
+
+  throw new Error(`No credentials configured for ${user}`);
 }
 
-function sliceUrl(patient: ConfigUserKey): string {
+function kvasirServerFor(patient: UserKey): string {
+  return (
+    KVASIR_CLIENT_SOURCES.find(({ client }) => client === patient)?.server ??
+    kvasirServerForPatient(patient, config.kvasirServer)
+  );
+}
+
+function podUrl(patient: UserKey): string {
+  return `${withoutTrailingSlash(kvasirServerFor(patient))}/${credentialsFor(patient).username}`;
+}
+
+function sliceUrl(patient: UserKey): string {
   return `${podUrl(patient)}/slices/${config.sliceName}`;
 }
 
-function policyName(owner: ConfigUserKey, patient: ConfigUserKey, endpoint: "Query" | "Changes"): string {
+function policyName(owner: UserKey, patient: UserKey, endpoint: "Query" | "Changes"): string {
   const suffix = owner === patient ? "Owner" : "AggregatorOwner";
   return `${config.sliceName}_${patient}_${suffix}${endpoint}`.replace(/[^A-Za-z0-9_]/g, "_");
 }
@@ -88,17 +101,18 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
 }
 
-async function actualUmaId(user: ConfigUserKey): Promise<string> {
+async function actualUmaId(user: UserKey): Promise<string> {
   const cached = umaIdCache.get(user);
   if (cached) {
     return cached;
   }
 
+  const credentials = credentialsFor(user);
   const auth = new KeycloakOIDCAuth();
   await auth.init(config.idp, config.realm);
   await auth.login(
-    config[user].username,
-    DEFAULT_PATIENT_PASSWORD,
+    credentials.username,
+    credentials.password,
     config.clientId,
     config.clientSecret
   );
@@ -114,9 +128,10 @@ async function actualUmaId(user: ConfigUserKey): Promise<string> {
   return id;
 }
 
-async function setupPoliciesForPatient(owner: ConfigUserKey, patient: ConfigUserKey) {
+async function setupPoliciesForPatient(owner: UserKey, patient: UserKey) {
   const ownerUmaId = await actualUmaId(owner);
   const patientUmaId = await actualUmaId(patient);
+  const patientCredentials = credentialsFor(patient);
   const patientPodUrl = podUrl(patient);
   const patientSliceUrl = sliceUrl(patient);
   const scopes = owner === patient ? ["read", "write"] : ["read"];
@@ -128,8 +143,8 @@ async function setupPoliciesForPatient(owner: ConfigUserKey, patient: ConfigUser
   const kvasir = new KvasirManagement(patientPodUrl, umaServerForPolicyRegistration());
   await kvasir.init(config.idp, config.realm);
   await kvasir.login(
-    config[patient].username,
-    DEFAULT_PATIENT_PASSWORD,
+    patientCredentials.username,
+    patientCredentials.password,
     config.clientId,
     config.clientSecret
   );
@@ -159,7 +174,7 @@ async function setupPoliciesForPatient(owner: ConfigUserKey, patient: ConfigUser
 }
 
 async function main() {
-  for (const [owner, patients] of Object.entries(AGGREGATOR_OWNER_PATIENTS) as [ConfigUserKey, ConfigUserKey[]][]) {
+  for (const [owner, patients] of Object.entries(AGGREGATOR_OWNER_PATIENTS)) {
     if (patients.length === 0) {
       continue;
     }
