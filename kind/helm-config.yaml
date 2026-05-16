@@ -3,6 +3,11 @@ external:
   httpPort: 5080
   httpsPort: 5443
 
+#external:
+#  host: aggregator.10.10.220.153.sslip.io
+#  httpPort: 80
+#  httpsPort: 443
+
 auth:
   oidc:
     clientId: aggregator-server
@@ -115,55 +120,5 @@ transformations:
         w-dist:
           port: 3000
           path: /w-dist
-  - name: kvasir-query
-    spec:
-      id: KvasirQuery
-      image: kvasir-query
-      fno: |
-        @prefix fno: <https://w3id.org/function/ontology#> .
-        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-        @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-
-        <KvasirQuery>
-          a fno:Function ;
-          fno:expects ( <Query> <Sources> <Schema> <Context> ) ;
-          fno:returns ( <QueryResult> ) .
-
-        <Query>
-          a fno:Parameter ;
-          fno:type xsd:string ;
-          fno:predicate <query> ;
-          fno:required "true"^^xsd:boolean .
-
-        <Sources>
-          a fno:Parameter ;
-          fno:type xsd:string ;
-          fno:predicate <sources> ;
-          fno:required "true"^^xsd:boolean .
-
-        <Schema>
-          a fno:Parameter ;
-          fno:type xsd:string ;
-          fno:predicate <schema> ;
-          fno:required "true"^^xsd:boolean .
-
-        <Context>
-          a fno:Parameter ;
-          fno:type xsd:string ;
-          fno:predicate <context> ;
-          fno:required "true"^^xsd:boolean .
-
-        <QueryResult>
-          a fno:Output ;
-          fno:predicate <result> .
-      inputMapping:
-        query: QUERY
-        sources: SOURCES
-        schema: SCHEMA
-        context: CONTEXT
-      outputMapping:
-        result:
-          port: 3000
-          path: /
 
 loglevel: debug
