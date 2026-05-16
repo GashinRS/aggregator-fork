@@ -2,7 +2,12 @@ import { KeycloakOIDCAuth } from "../util.js";
 import { DataFactory } from "rdf-data-factory";
 import { Writer } from "n3";
 import { config } from "../config.js";
-import { kvasirPatientSources } from "./kvasir-patients.js";
+import {
+  DEFAULT_KVASIR_PATIENT_COUNT,
+  DEFAULT_PATIENT_PASSWORD,
+  kvasirPatientSources,
+  type KvasirPatientSource,
+} from "./kvasir-patients.js";
 
 const df = new DataFactory();
 
@@ -12,17 +17,85 @@ const TF = "/transformations";
 const SVC = "/services";
 const TF_ID = "IncrementalKvasir";
 const CREATED_STATUS_CODES = new Set([201, 202]);
+const SERVICE_REQUESTOR = "patient15";
+const SERVICE_REQUESTOR_PASSWORD = DEFAULT_PATIENT_PASSWORD;
+// const SERVICE_CREATION_WAIT_MS = 60_000;
+const SERVICE_CREATION_WAIT_MS = 0;
 
 type ServiceDefinition = {
   service: string;
   metric: string;
 };
 
+type UserCredentials = {
+  username: string;
+  password: string;
+};
+
 function withoutTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-const KVASIR_CLIENT_SOURCES = kvasirPatientSources();
+function requestorCredentials(): UserCredentials {
+  const maybeConfig = (config as unknown as Record<string, Partial<UserCredentials>>)[
+    SERVICE_REQUESTOR
+  ];
+
+  return {
+    username: maybeConfig?.username ?? SERVICE_REQUESTOR,
+    password:
+      typeof maybeConfig?.password === "string"
+        ? maybeConfig.password
+        : SERVICE_REQUESTOR_PASSWORD,
+  };
+}
+
+function requestedPatients(): string[] | undefined {
+  return process.env.KVASIR_PATIENTS
+    ?.split(",")
+    .map((patient) => patient.trim())
+    .filter(Boolean);
+}
+
+function selectedKvasirPatientSources(): {
+  sources: KvasirPatientSource[];
+  requested: string[] | undefined;
+} {
+  const requested = requestedPatients();
+  const requestedPatientSet = requested ? new Set(requested) : undefined;
+  const allSources = requestedPatientSet
+    ? kvasirPatientSources(DEFAULT_KVASIR_PATIENT_COUNT)
+    : kvasirPatientSources();
+  const sources = allSources.filter(({ client }) =>
+    requestedPatientSet ? requestedPatientSet.has(client) : true
+  );
+
+  if (requestedPatientSet && sources.length !== requestedPatientSet.size) {
+    const found = new Set(sources.map(({ client }) => client));
+    const missing = [...requestedPatientSet].filter((patient) => !found.has(patient));
+    throw new Error(`Unknown Kvasir patients requested: ${missing.join(", ")}`);
+  }
+
+  return { sources, requested };
+}
+
+function sourceList(sources: KvasirPatientSource[]): string {
+  return sources
+    .map(({ client, server }) => `${withoutTrailingSlash(server)}/${client}/slices/${config.sliceName}/query`)
+    .join(",");
+}
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function timestamp(): string {
+  return new Date().toISOString();
+}
+
+function formatDuration(ms: number): string {
+  return `${Math.round(ms / 100) / 10}s`;
+}
 
 // Edit this list to choose which services this script creates.
 // Metrics should already include the correct query token:
@@ -110,10 +183,6 @@ const SAMPLED_SERVICES: ServiceDefinition[] = [
   { service: "wearable-skt", metric: "wear:wearable.skt" },
   { service: "wearable-ibi", metric: "wear:wearable.ibi" },
 ];
-
-const SOURCES = KVASIR_CLIENT_SOURCES
-  .map(({ client, server }) => `${withoutTrailingSlash(server)}/${client}/slices/${config.sliceName}/query`)
-  .join(",");
 
 const SCHEMA = `
 type Query {
@@ -216,16 +285,18 @@ async function createService(
   umaFetch: ReturnType<KeycloakOIDCAuth["createUMAFetch"]>,
   name: string,
   metric: string,
-  query: string
+  query: string,
+  sources: string
 ): Promise<void> {
   const params = {
     query,
-    sources: SOURCES,
+    sources,
     schema: SCHEMA,
     context: CONTEXT,
   };
 
-  console.log(`=== Creating service "${name}" for metric "${metric}" ===`);
+  const startedAt = Date.now();
+  console.log(`=== [${timestamp()}] Creating service "${name}" for metric "${metric}" ===`);
   const desc = await parseServiceRequest(name, TF_ID, params);
   const response = await umaFetch(`${AGGREGATOR}${SVC}`, {
     method: "POST",
@@ -233,10 +304,11 @@ async function createService(
     body: desc,
   });
 
-  console.log(`=== Response status for "${name}": ${response.status} ===`);
+  console.log(`=== [${timestamp()}] Response status for "${name}": ${response.status} after ${formatDuration(Date.now() - startedAt)} ===`);
   const responseText = await response.text();
 
   if (CREATED_STATUS_CODES.has(response.status)) {
+    console.log(`=== [${timestamp()}] Created "${name}" in ${formatDuration(Date.now() - startedAt)} ===`);
     console.log(responseText);
     return;
   }
@@ -297,52 +369,72 @@ async function parseServiceRequest(
 
 async function main() {
   const totalServices = RAW_SERVICES.length + SAMPLED_SERVICES.length;
+  const servicesToCreate = [
+    ...RAW_SERVICES.map((definition) => ({
+      ...definition,
+      query: metricQuery(definition.metric),
+    })),
+    ...SAMPLED_SERVICES.map((definition) => ({
+      ...definition,
+      query: sampledMetricQuery(definition.metric),
+    })),
+  ];
+  const selected = selectedKvasirPatientSources();
+  const sources = sourceList(selected.sources);
 
   if (totalServices === 0) {
     throw new Error("No services configured. Add at least one service definition.");
   }
 
+  const runStartedAt = Date.now();
+  console.log(`=== [${timestamp()}] Creating services from ${selected.sources.length} Kvasir patient sources ===`);
+  if (selected.requested) {
+    console.log(`[${timestamp()}] Patient filter: ${selected.requested.join(", ")}`);
+  }
+  console.log(`[${timestamp()}] Service requestor: ${SERVICE_REQUESTOR}`);
+  console.log(`[${timestamp()}] Wait between service creations: ${SERVICE_CREATION_WAIT_MS}ms`);
+
   const auth = new KeycloakOIDCAuth();
+  const credentials = requestorCredentials();
+  console.log(`=== [${timestamp()}] Logging in as ${credentials.username} ===`);
   await auth.init(config.idp, config.realm);
   await auth.login(
-    config.patient1.username,
-    config.patient1.password,
+    credentials.username,
+    credentials.password,
     config.clientId,
     config.clientSecret
   );
+  console.log(`=== [${timestamp()}] Login completed ===`);
 
   const umaFetch = auth.createUMAFetch();
   let created = 0;
   const failed: string[] = [];
 
-  for (const { service, metric } of RAW_SERVICES) {
+  for (const [index, { service, metric, query }] of servicesToCreate.entries()) {
+    const serviceStartedAt = Date.now();
     try {
-      await createService(umaFetch, service, metric, metricQuery(metric));
+      await createService(umaFetch, service, metric, query, sources);
       created++;
     } catch (error) {
       failed.push(service);
-      console.error(`=== Failed to create "${service}", continuing with next service ===`);
+      console.error(`=== [${timestamp()}] Failed to create "${service}" after ${formatDuration(Date.now() - serviceStartedAt)}, continuing with next service ===`);
       console.error(error);
     }
-  }
 
-  for (const { service, metric } of SAMPLED_SERVICES) {
-    try {
-      await createService(umaFetch, service, metric, sampledMetricQuery(metric));
-      created++;
-    } catch (error) {
-      failed.push(service);
-      console.error(`=== Failed to create "${service}", continuing with next service ===`);
-      console.error(error);
+    if (index < servicesToCreate.length - 1 && SERVICE_CREATION_WAIT_MS > 0) {
+      const nextService = servicesToCreate[index + 1].service;
+      console.log(`=== [${timestamp()}] Waiting ${formatDuration(SERVICE_CREATION_WAIT_MS)} before creating "${nextService}" ===`);
+      await sleep(SERVICE_CREATION_WAIT_MS);
+      console.log(`=== [${timestamp()}] Wait finished ===`);
     }
   }
 
   console.log(
-    `=== Finished ${totalServices} services (${created} created, ${failed.length} failed; ${RAW_SERVICES.length} raw, ${SAMPLED_SERVICES.length} sampled) ===`
+    `=== [${timestamp()}] Finished ${totalServices} services in ${formatDuration(Date.now() - runStartedAt)} (${created} created, ${failed.length} failed; ${RAW_SERVICES.length} raw, ${SAMPLED_SERVICES.length} sampled) ===`
   );
 
   if (failed.length > 0) {
-    console.error(`=== Failed services: ${failed.join(", ")} ===`);
+    console.error(`=== [${timestamp()}] Failed services: ${failed.join(", ")} ===`);
     process.exitCode = 1;
   }
 }

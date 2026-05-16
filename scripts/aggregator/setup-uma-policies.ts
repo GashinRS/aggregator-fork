@@ -23,9 +23,10 @@ const evalMediumPatients = Array.from({ length: 15 }, (_, index) => `eval-medium
 // Map each aggregator owner to the patients whose slice data they need to query.
 // Add another owner here if needed; the patient list itself is generated.
 const AGGREGATOR_OWNER_PATIENTS: Record<UserKey, UserKey[]> = {
-  patient1: numberedPatients,
-  "eval-low1": evalLowPatients,
-  "eval-medium1": evalMediumPatients,
+  //patient1: numberedPatients,
+  patient15: numberedPatients,
+  //"eval-low1": evalLowPatients,
+  //"eval-medium1": evalMediumPatients,
 };
 
 function withoutTrailingSlash(value: string): string {

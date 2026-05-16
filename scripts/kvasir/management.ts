@@ -164,7 +164,11 @@ export class KvasirManagement {
       "@context": context,
       "kss:name": sliceName,
       "kss:description": sliceDescription,
-      "kss:schema": schema
+      "kss:schema": {
+        "@type": "kss:EmbeddedSliceSchema",
+        "kss:sdl": schema,
+      },
+      "kss:tags": [],
     };
 
     const resp = await this.umaFetch(sliceUri, {

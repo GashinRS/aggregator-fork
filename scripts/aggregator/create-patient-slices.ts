@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import { KvasirManagement } from "../kvasir/management.js";
 import {
+  DEFAULT_KVASIR_PATIENT_COUNT,
   DEFAULT_PATIENT_PASSWORD,
   kvasirPatientSources,
 } from "./kvasir-patients.js";
@@ -93,6 +94,7 @@ function credentialsFor(user: string): UserCredentials {
 async function createSliceForPatient(client: string, server: string): Promise<string> {
   const credentials = credentialsFor(client);
   const podUrl = `${withoutTrailingSlash(server)}/${credentials.username}`;
+  const sliceUri = `${podUrl}/slices`;
   const kvasir = new KvasirManagement(podUrl, umaServerForPolicyRegistration());
 
   await kvasir.init(config.idp, config.realm);
@@ -103,14 +105,61 @@ async function createSliceForPatient(client: string, server: string): Promise<st
     config.clientSecret
   );
 
-  return kvasir.registerSlice(CONTEXT, SCHEMA, SLICE_NAME, SLICE_DESCRIPTION);
+  const response = await fetch(sliceUri, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/ld+json",
+      Authorization: `Bearer ${await kvasir.auth.getAccessToken()}`,
+    },
+    body: JSON.stringify({
+      "@context": CONTEXT,
+      "kss:name": SLICE_NAME,
+      "kss:description": SLICE_DESCRIPTION,
+      "kss:schema": {
+        "@type": "kss:EmbeddedSliceSchema",
+        "kss:sdl": SCHEMA,
+      },
+      "kss:tags": [],
+    }),
+  });
+
+  if (!response.ok) {
+    if (response.status === 409) {
+      console.log("Slice already exists");
+      return `${sliceUri}/${SLICE_NAME}`;
+    }
+
+    throw new Error(`Error registering slice ${response.status}: ${await response.text()}`);
+  }
+
+  console.log(`Slice registered ${response.status}`);
+  return `${sliceUri}/${SLICE_NAME}`;
 }
 
 async function main() {
-  const sources = kvasirPatientSources();
+  const requestedPatients = process.env.KVASIR_PATIENTS
+    ?.split(",")
+    .map((patient) => patient.trim())
+    .filter(Boolean);
+  const requestedPatientSet = requestedPatients ? new Set(requestedPatients) : undefined;
+  const allSources = requestedPatientSet
+    ? kvasirPatientSources(DEFAULT_KVASIR_PATIENT_COUNT)
+    : kvasirPatientSources();
+  const sources = allSources.filter(({ client }) =>
+    requestedPatientSet ? requestedPatientSet.has(client) : true
+  );
   const failures: Array<{ patient: string; error: unknown }> = [];
 
+  if (requestedPatientSet && sources.length !== requestedPatientSet.size) {
+    const found = new Set(sources.map(({ client }) => client));
+    const missing = [...requestedPatientSet].filter((patient) => !found.has(patient));
+    throw new Error(`Unknown Kvasir patients requested: ${missing.join(", ")}`);
+  }
+
   console.log(`=== Creating "${SLICE_NAME}" slice for ${sources.length} Kvasir patients ===`);
+  if (requestedPatients) {
+    console.log(`Patient filter: ${requestedPatients.join(", ")}`);
+  }
 
   for (const { client, server } of sources) {
     console.log(`\n=== ${client} (${server}) ===`);

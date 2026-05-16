@@ -1,17 +1,54 @@
+const UMA_CONFIG_RETRIES = Number.parseInt(process.env.UMA_CONFIG_RETRIES ?? "5", 10);
+const UMA_CONFIG_RETRY_DELAY_MS = Number.parseInt(process.env.UMA_CONFIG_RETRY_DELAY_MS ?? "1000", 10);
+const UMA_CONFIG_CACHE = new Map<string, any>();
+
+function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isTransientUMAConfigFailure(status: number) {
+    return status === 408 || status === 425 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
 export async function getUMAConfig(as_uri: string) {
+    const cached = UMA_CONFIG_CACHE.get(as_uri);
+    if (cached) return cached;
+
     const config_uri = `${as_uri}/.well-known/uma2-configuration`;
 
-    const response = await fetch(config_uri, {
-        method: "GET",
-        headers: { "Accept": "application/json" }
-    });
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= UMA_CONFIG_RETRIES; attempt++) {
+        try {
+            const response = await fetch(config_uri, {
+                method: "GET",
+                headers: { "Accept": "application/json" }
+            });
 
-    if (!response.ok) {
-        throw new Error(`Failed to fetch UMA config: ${response.status} ${response.statusText}`);
+            if (response.ok) {
+                const config = await response.json();
+                UMA_CONFIG_CACHE.set(as_uri, config);
+                return config;
+            }
+
+            const responseBody = await response.text();
+            lastError = new Error(`Failed to fetch UMA config: ${response.status} ${response.statusText}${responseBody ? `, response: ${responseBody}` : ""}`);
+
+            if (!isTransientUMAConfigFailure(response.status) || attempt === UMA_CONFIG_RETRIES) {
+                throw lastError;
+            }
+        } catch (err) {
+            lastError = err;
+            if (attempt === UMA_CONFIG_RETRIES) {
+                throw err;
+            }
+        }
+
+        const delay = UMA_CONFIG_RETRY_DELAY_MS * attempt;
+        console.warn(`Failed to fetch UMA config from ${config_uri}; retrying in ${delay}ms (attempt ${attempt}/${UMA_CONFIG_RETRIES})`);
+        await sleep(delay);
     }
 
-    const config = await response.json();
-    return config;
+    throw lastError instanceof Error ? lastError : new Error(`Failed to fetch UMA config: ${String(lastError)}`);
 }
 
 async function parseAuthenticateHeader(wwwAuthenticateHeader: string): Promise<{ issuer: string, tokenEndpoint: string; ticket: string }> {
