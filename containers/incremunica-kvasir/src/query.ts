@@ -5,6 +5,7 @@ import { Agent } from "undici";
 import { logMeasurement, viewRowCount } from "./measurement.js";
 
 const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
+const DEBUG_VIEW_EVENTS = process.env.DEBUG_VIEW_EVENTS === "1" || DEBUG_STREAM_EVENTS;
 const MEASUREMENT_LOG_INTERVAL_MS = parseInt(process.env.MEASUREMENT_LOG_INTERVAL_MS || "1000", 10);
 const STREAM_RECONNECT_INITIAL_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_INITIAL_DELAY_MS || "1000", 10);
 const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_DELAY_MS || "30000", 10);
@@ -140,7 +141,9 @@ export async function querySources(
       }
 
       if (removedRows === 0) {
-        console.log(`[VIEW] Reconnect replay settled for ${replay.source}; no stale rows removed`);
+        if (DEBUG_VIEW_EVENTS) {
+          console.log(`[VIEW] Reconnect replay settled for ${replay.source}; no stale rows removed`);
+        }
         logMeasurement({
           stage: "t6",
           event: "source_replay_settled",
@@ -162,7 +165,9 @@ export async function querySources(
       counters.sourceResets++;
       counters.changedSinceLastLog = true;
 
-      console.log(`[VIEW] Reconnect replay settled for ${replay.source}; removed ${removedRows} stale rows`);
+      if (DEBUG_VIEW_EVENTS) {
+        console.log(`[VIEW] Reconnect replay settled for ${replay.source}; removed ${removedRows} stale rows`);
+      }
       logMeasurement({
         stage: "t6",
         event: "source_replay_reconciled",
@@ -200,7 +205,7 @@ export async function querySources(
         }
 
         if (activeReplay && sourceCount > 0) {
-          if (DEBUG_STREAM_EVENTS) {
+          if (DEBUG_VIEW_EVENTS) {
             console.log(`[VIEW] Reconnect replay confirmed existing source row for ${source}`);
           }
           return;
@@ -209,10 +214,14 @@ export async function querySources(
         if (view.has(key)) {
           const entry = view.get(key)!;
           entry.count++;
-          console.log(`[VIEW] Incremented count (${entry.count}) for key`);
+          if (DEBUG_VIEW_EVENTS) {
+            console.log(`[VIEW] Incremented count (${entry.count}) for key`);
+          }
         } else {
           view.set(key, { bindings: b, count: 1 });
-          console.log("[VIEW] Added new entry with count=1");
+          if (DEBUG_VIEW_EVENTS) {
+            console.log("[VIEW] Added new entry with count=1");
+          }
         }
 
         if (source && contributions) {
@@ -235,7 +244,9 @@ export async function querySources(
             existingElement.count--;
             if (existingElement.count <= 0) {
               view.delete(key);
-              console.log("[VIEW] Entry removed (count <= 0)");
+              if (DEBUG_VIEW_EVENTS) {
+                console.log("[VIEW] Entry removed (count <= 0)");
+              }
             }
           }
           if (source && removed === 0) {
@@ -245,7 +256,9 @@ export async function querySources(
 
           counters.totalRemoves++;
           counters.changedSinceLastLog = true;
-          console.log("[VIEW] Removed one source contribution");
+          if (DEBUG_VIEW_EVENTS) {
+            console.log("[VIEW] Removed one source contribution");
+          }
           emitViewUpdate(source);
         } else {
           console.error("[ERROR] Removal received for non-existing key:", key);
