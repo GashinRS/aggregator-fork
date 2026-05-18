@@ -18,6 +18,7 @@ const STREAM_IDLE_TIMEOUT_MS = parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || "1
 const STATIC_CATCHUP_ENABLED = process.env.STATIC_CATCHUP_ENABLED !== "0";
 const STATIC_CATCHUP_PAGE_SIZE = parseInt(process.env.STATIC_CATCHUP_PAGE_SIZE || "25000", 10);
 const STATIC_CATCHUP_MAX_PAGES = parseInt(process.env.STATIC_CATCHUP_MAX_PAGES || "1000", 10);
+const STATIC_CATCHUP_INTERVAL_MS = parseInt(process.env.STATIC_CATCHUP_INTERVAL_MS || "60000", 10);
 
 const XSD_DATE_TIME = "http://www.w3.org/2001/XMLSchema#dateTime";
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
@@ -91,6 +92,7 @@ export async function querySources(
     }
   });
   const staticCatchupPlan = STATIC_CATCHUP_ENABLED ? buildObservationStaticCatchupPlan(query, context) : undefined;
+  const staticCatchupsInFlight = new Set<string>();
   if (staticCatchupPlan) {
     console.log(`[QUERY] Static catch-up enabled for metric ${staticCatchupPlan.metricToken}`);
   } else if (STATIC_CATCHUP_ENABLED) {
@@ -288,6 +290,13 @@ export async function querySources(
 
   const runStaticCatchup = async (source: typeof sources[number], reconnectAttempt: number) => {
     if (!staticCatchupPlan) return false;
+    if (staticCatchupsInFlight.has(source.value)) {
+      if (DEBUG_VIEW_EVENTS) {
+        console.log(`[STATIC] Catch-up already running for ${source.value}, skipping overlapping run`);
+      }
+      return false;
+    }
+    staticCatchupsInFlight.add(source.value);
 
     const replay: ReplayState = {
       source: source.value,
@@ -383,6 +392,8 @@ export async function querySources(
         error: err instanceof Error ? err.message : String(err),
       });
       return false;
+    } finally {
+      staticCatchupsInFlight.delete(source.value);
     }
   };
 
@@ -458,6 +469,13 @@ export async function querySources(
         emitViewUpdate(source);
       });
     } else {
+      if (staticCatchupPlan && source && !activeReplay) {
+        if (DEBUG_VIEW_EVENTS) {
+          console.log(`[VIEW] Ignored live stream removal for ${source}; static catch-up owns snapshot reconciliation`);
+        }
+        return;
+      }
+
       await mutex.runExclusive(() => {
         if (view.has(key)) {
           const removed = source ? removeSourceContribution(source, key, 1) : 0;
@@ -686,7 +704,18 @@ export async function querySources(
     }, delay);
   };
 
+  if (staticCatchupPlan) {
+    await Promise.all(sources.map(source => runStaticCatchup(source, 0)));
+  }
+
   await Promise.all(sources.map(source => startSource(source)));
+  if (staticCatchupPlan && STATIC_CATCHUP_INTERVAL_MS > 0) {
+    for (const source of sources) {
+      setInterval(() => {
+        void runStaticCatchup(source, 0);
+      }, STATIC_CATCHUP_INTERVAL_MS);
+    }
+  }
 }
 
 export function materializedViewToSparqlJson(view: Map<string,{bindings: any, count: number}>) {
