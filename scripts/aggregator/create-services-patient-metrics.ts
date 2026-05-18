@@ -17,10 +17,11 @@ const TF = "/transformations";
 const SVC = "/services";
 const TF_ID = "IncrementalKvasir";
 const CREATED_STATUS_CODES = new Set([201, 202]);
-const SERVICE_REQUESTOR = "patient15";
+const SERVICE_REQUESTOR = "patient1";
 const SERVICE_REQUESTOR_PASSWORD = DEFAULT_PATIENT_PASSWORD;
-// const SERVICE_CREATION_WAIT_MS = 60_000;
+// const SERVICE_CREATION_WAIT_MS = 30_000;
 const SERVICE_CREATION_WAIT_MS = 0;
+const SAMPLED_SERVICE_MINUTE_BUCKET_SIZE = 1;
 
 type ServiceDefinition = {
   service: string;
@@ -143,7 +144,7 @@ const RAW_SERVICES: ServiceDefinition[] = [
   // { service: "environment-open", metric: "act:environment.open" },
   // { service: "airquality-voc-total", metric: "act:airquality.voc_total" },
   // { service: "smartphone-proximity", metric: "wear:smartphone.proximity" },
-  // { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
+  { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
   // { service: "dyamand-airquality-co2", metric: "act:org.dyamand.types.airquality.CO2" },
   // { service: "atmospheric-pressure", metric: "act:org.dyamand.types.common.AtmosphericPressure" },
   // { service: "loudness", metric: "act:org.dyamand.types.common.Loudness" },
@@ -155,7 +156,7 @@ const RAW_SERVICES: ServiceDefinition[] = [
   // { service: "weather-windspeed", metric: "act:weather.windspeed" },
   // { service: "environment-relay", metric: "act:environment.relay" },
   // { service: "environment-button", metric: "act:environment.button" },
-  { service: "wearable-battery-level", metric: "wear:wearable.battery_level" },
+  // { service: "wearable-battery-level", metric: "wear:wearable.battery_level" },
   // { service: "smartphone-screen", metric: "wear:smartphone.screen" },
   // { service: "environment-blind", metric: "act:environment.blind" },
   // { service: "wearable-on-wrist", metric: "wear:wearable.on_wrist" },
@@ -256,6 +257,10 @@ WHERE {
 }
 
 function sampledMetricQuery(metric: string): string {
+  if (!Number.isInteger(SAMPLED_SERVICE_MINUTE_BUCKET_SIZE) || SAMPLED_SERVICE_MINUTE_BUCKET_SIZE < 1) {
+    throw new Error("SAMPLED_SERVICE_MINUTE_BUCKET_SIZE must be a positive integer.");
+  }
+
   return `
 PREFIX saref: <https://saref.etsi.org/core/>
 PREFIX void: <http://rdfs.org/ns/void#>
@@ -274,7 +279,7 @@ WHERE {
   BIND(MONTH(?timestamp) AS ?month)
   BIND(DAY(?timestamp) AS ?day)
   BIND(HOURS(?timestamp) AS ?hour)
-  BIND((FLOOR(MINUTES(?timestamp) / 5) * 5) AS ?minuteBucket)
+  BIND((FLOOR(MINUTES(?timestamp) / ${SAMPLED_SERVICE_MINUTE_BUCKET_SIZE}) * ${SAMPLED_SERVICE_MINUTE_BUCKET_SIZE}) AS ?minuteBucket)
 }
 GROUP BY ?dataset ?year ?month ?day ?hour ?minuteBucket
 ORDER BY ?dataset ?year ?month ?day ?hour ?minuteBucket
