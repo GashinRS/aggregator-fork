@@ -57,5 +57,9 @@ func getAccessToken() (string, error) {
 		return "", errors.New("no access_token returned from token service")
 	}
 
+	if body.IDToken != "" {
+		return body.IDToken, nil
+	}
+
 	return body.AccessToken, nil
 }

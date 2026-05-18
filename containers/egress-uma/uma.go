@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"egress-uma/model"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -24,6 +27,19 @@ type TokenResponse struct {
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int    `json:"expires_in,omitempty"`
 }
+
+type cachedRPT struct {
+	AccessToken string
+	TokenType   string
+	ExpiresAt   time.Time
+}
+
+var rptCache = struct {
+	sync.RWMutex
+	tokens map[string]cachedRPT
+}{tokens: make(map[string]cachedRPT)}
+
+const rptExpiryBuffer = 30 * time.Second
 
 // RequestWithUMA performs the UMA flow for a request to an external URL
 func RequestWithUMA(client *http.Client, r *http.Request) (*http.Response, error) {
@@ -48,6 +64,33 @@ func RequestWithUMA(client *http.Client, r *http.Request) (*http.Response, error
 		Host:     requestHost(r),
 		Path:     r.URL.Path,
 		RawQuery: r.URL.RawQuery,
+	}
+
+	cacheKey := rptCacheKey(r.Method, dest)
+	if cached, ok := getCachedRPT(cacheKey); ok {
+		logrus.WithField("cache_key", cacheKey).Debug("Trying cached UMA RPT")
+		cachedReq, err := http.NewRequest(r.Method, dest.String(), bytes.NewReader(bodyBytes))
+		if err != nil {
+			logrus.WithError(err).Error("Failed to create cached-token request")
+			return nil, err
+		}
+		cachedReq.Header = r.Header.Clone()
+		cachedReq.Header.Set("Authorization", cached.TokenType+" "+cached.AccessToken)
+
+		resp, err := client.Do(cachedReq)
+		if err != nil {
+			logrus.WithError(err).Error("Cached-token request failed")
+			deleteCachedRPT(cacheKey)
+		} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			logrus.Info("Request succeeded with cached UMA RPT")
+			return resp, nil
+		} else if shouldRetryWithoutCachedRPT(resp) {
+			logrus.WithField("status", resp.StatusCode).Info("Cached UMA RPT was rejected; retrying full UMA flow")
+			resp.Body.Close()
+			deleteCachedRPT(cacheKey)
+		} else {
+			return resp, nil
+		}
 	}
 
 	logrus.WithField("target_url", dest.String()).Info("Preparing initial request")
@@ -164,6 +207,7 @@ func RequestWithUMA(client *http.Client, r *http.Request) (*http.Response, error
 		return nil, err
 	}
 
+	cacheRPT(cacheKey, rpt)
 	logrus.Debug("Successfully decoded UMA token")
 
 	// --- Final request with UMA token
@@ -189,6 +233,85 @@ func RequestWithUMA(client *http.Client, r *http.Request) (*http.Response, error
 	logrus.WithField("status", finalResp.StatusCode).Info("Final response received")
 
 	return finalResp, nil
+}
+
+func rptCacheKey(method string, target *url.URL) string {
+	keyURL := *target
+	keyURL.RawQuery = ""
+	return method + " " + keyURL.String()
+}
+
+func getCachedRPT(key string) (cachedRPT, bool) {
+	rptCache.RLock()
+	token, ok := rptCache.tokens[key]
+	rptCache.RUnlock()
+	if !ok {
+		return cachedRPT{}, false
+	}
+	if time.Now().Add(rptExpiryBuffer).After(token.ExpiresAt) {
+		deleteCachedRPT(key)
+		return cachedRPT{}, false
+	}
+	return token, true
+}
+
+func cacheRPT(key string, token TokenResponse) {
+	if token.AccessToken == "" {
+		return
+	}
+	tokenType := token.TokenType
+	if tokenType == "" {
+		tokenType = "Bearer"
+	}
+
+	expiresAt := time.Now().Add(4 * time.Minute)
+	if token.ExpiresIn > 0 {
+		expiresAt = time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+	} else if exp, ok := jwtExpiry(token.AccessToken); ok {
+		expiresAt = exp
+	}
+
+	rptCache.Lock()
+	rptCache.tokens[key] = cachedRPT{
+		AccessToken: token.AccessToken,
+		TokenType:   tokenType,
+		ExpiresAt:   expiresAt,
+	}
+	rptCache.Unlock()
+}
+
+func deleteCachedRPT(key string) {
+	rptCache.Lock()
+	delete(rptCache.tokens, key)
+	rptCache.Unlock()
+}
+
+func shouldRetryWithoutCachedRPT(resp *http.Response) bool {
+	if resp.Header.Get("WWW-Authenticate") != "" {
+		return true
+	}
+	return resp.StatusCode == http.StatusBadRequest ||
+		resp.StatusCode == http.StatusUnauthorized ||
+		resp.StatusCode == http.StatusForbidden
+}
+
+func jwtExpiry(token string) (time.Time, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return time.Time{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(claims.Exp, 0), true
 }
 
 func requestScheme(r *http.Request) string {

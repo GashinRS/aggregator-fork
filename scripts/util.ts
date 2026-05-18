@@ -1,6 +1,9 @@
 const UMA_CONFIG_RETRIES = Number.parseInt(process.env.UMA_CONFIG_RETRIES ?? "5", 10);
 const UMA_CONFIG_RETRY_DELAY_MS = Number.parseInt(process.env.UMA_CONFIG_RETRY_DELAY_MS ?? "1000", 10);
+const TOKEN_REFRESH_BUFFER_MS = Number.parseInt(process.env.TOKEN_REFRESH_BUFFER_MS ?? "60000", 10);
+const UMA_RPT_REFRESH_BUFFER_MS = Number.parseInt(process.env.UMA_RPT_REFRESH_BUFFER_MS ?? "30000", 10);
 const UMA_CONFIG_CACHE = new Map<string, any>();
+const UMA_RPT_CACHE = new Map<string, { accessToken: string; tokenType: string; expiresAt: number }>();
 
 function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -153,7 +156,7 @@ export class KeycloakOIDCAuth {
      * Make sure access token is still valid, otherwise refresh it.
      */
     private async ensureValidTokens() {
-        if (!this.accessToken || !this.expiresAt || Date.now() >= this.expiresAt - 500) {
+        if (!this.accessToken || !this.expiresAt || Date.now() >= this.expiresAt - TOKEN_REFRESH_BUFFER_MS) {
             await this.refreshAccessToken();
         }
     }
@@ -183,6 +186,24 @@ export class KeycloakOIDCAuth {
      */
     createUMAFetch() {
         return async (url: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+            const cacheKey = umaRptCacheKey(url, init);
+            const cached = UMA_RPT_CACHE.get(cacheKey);
+            if (cached && cached.expiresAt > Date.now() + UMA_RPT_REFRESH_BUFFER_MS) {
+                const cachedHeaders = new Headers(init.headers);
+                cachedHeaders.set("Authorization", `${cached.tokenType} ${cached.accessToken}`);
+
+                const cachedResponse = await fetch(url, { ...init, headers: cachedHeaders });
+                if (cachedResponse.status >= 200 && cachedResponse.status < 300) {
+                    return cachedResponse;
+                }
+
+                if (shouldRetryWithoutCachedRpt(cachedResponse)) {
+                    UMA_RPT_CACHE.delete(cacheKey);
+                } else {
+                    return cachedResponse;
+                }
+            }
+
             // First attempt with no token
             const noTokenResponse = await fetch(url, init);
 
@@ -199,8 +220,8 @@ export class KeycloakOIDCAuth {
             }
             const { issuer, tokenEndpoint, ticket } = await parseAuthenticateHeader(wwwAuthenticateHeader);
 
-            // Create Keycloak OIDC access token as claim
-            const claimToken = await this.getAccessToken();
+            // Create Keycloak OIDC ID token as claim
+            const claimToken = await this.getIdToken();
             
             // UMA token exchange request
             const umaRequestBody = new URLSearchParams({
@@ -221,6 +242,7 @@ export class KeycloakOIDCAuth {
             }
 
             const rptJson = await umaResponse.json();
+            cacheUmaRpt(cacheKey, rptJson);
 
             // Add RPT to headers
             const newHeaders = new Headers(init.headers);
@@ -229,5 +251,48 @@ export class KeycloakOIDCAuth {
             // Retry the original request
             return fetch(url, { ...init, headers: newHeaders });
         };
+    }
+}
+
+function umaRptCacheKey(url: RequestInfo | URL, init: RequestInit): string {
+    const method = (init.method ?? "GET").toUpperCase();
+    const urlString =
+        typeof url === "string" ? url :
+        url instanceof URL ? url.toString() :
+        url.url;
+
+    return `${method} ${urlString}`;
+}
+
+function shouldRetryWithoutCachedRpt(response: Response): boolean {
+    return response.headers.has("WWW-Authenticate") ||
+        response.status === 400 ||
+        response.status === 401 ||
+        response.status === 403;
+}
+
+function cacheUmaRpt(cacheKey: string, rptJson: any) {
+    if (typeof rptJson?.access_token !== "string" || rptJson.access_token.length === 0) {
+        return;
+    }
+
+    UMA_RPT_CACHE.set(cacheKey, {
+        accessToken: rptJson.access_token,
+        tokenType: typeof rptJson.token_type === "string" && rptJson.token_type.length > 0 ? rptJson.token_type : "Bearer",
+        expiresAt: jwtExpiresAt(rptJson.access_token) ?? Date.now() + 4 * 60_000,
+    });
+}
+
+function jwtExpiresAt(token: string): number | undefined {
+    const [, payload] = token.split(".");
+    if (!payload) {
+        return undefined;
+    }
+
+    try {
+        const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+        return typeof parsed.exp === "number" ? parsed.exp * 1000 : undefined;
+    } catch {
+        return undefined;
     }
 }

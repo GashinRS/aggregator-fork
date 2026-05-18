@@ -7,6 +7,7 @@ import (
 	"ingress-uma/model"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 )
@@ -143,12 +144,20 @@ func createResource(aggData AggregatorAuthData, resourceId string, scopes []Scop
 	if update {
 		if res.StatusCode != http.StatusOK {
 			logrus.WithFields(logrus.Fields{"status": res.Status, "body": string(body), "resource_id": resourceId}).Error("Resource update request failed")
-			return nil
+			return fmt.Errorf("resource update request failed: %s - %s", res.Status, string(body))
 		}
 	} else {
 		if res.StatusCode != http.StatusCreated {
+			if res.StatusCode == http.StatusConflict || strings.Contains(string(body), "already registered") {
+				resourceIndex[resourceId] = ResourceData{UmaID: resourceId, AggData: aggData}
+				logrus.WithFields(logrus.Fields{
+					"resource_id": resourceId,
+					"uma_id":      resourceId,
+				}).Info("Resource already existed in UMA; cached local registration")
+				return nil
+			}
 			logrus.WithFields(logrus.Fields{"status": res.Status, "body": string(body), "resource_id": resourceId}).Error("Resource registration request failed")
-			return nil
+			return fmt.Errorf("resource registration request failed: %s - %s", res.Status, string(body))
 		}
 		var responseData struct {
 			ID string `json:"_id"`
@@ -159,7 +168,7 @@ func createResource(aggData AggregatorAuthData, resourceId string, scopes []Scop
 		}
 		if responseData.ID == "" {
 			logrus.WithFields(logrus.Fields{"resource_id": resourceId}).Warn("Unexpected UMA response; no UMA id received")
-			return nil
+			responseData.ID = resourceId
 		}
 		resourceIndex[resourceId] = ResourceData{UmaID: responseData.ID, AggData: aggData}
 		logrus.WithFields(logrus.Fields{"resource_id": resourceId, "uma_id": responseData.ID}).Info("Registered resource with UMA")

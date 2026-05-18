@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -216,7 +217,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"access_token": token.AccessToken,
-		"id_token":     idToken,
+		"id_token":     freshClaimToken(token, idToken),
 	})
 }
 
@@ -338,6 +339,35 @@ func ensureValidToken(entry *TokenEntry, userID string) (*oauth2.Token, string, 
 	}
 
 	return newToken, entry.IDToken, nil
+}
+
+func freshClaimToken(token *oauth2.Token, idToken string) string {
+	if idToken == "" {
+		return token.AccessToken
+	}
+	if expiresSoon(idToken, time.Now().Add(refreshBuffer)) && token.AccessToken != "" {
+		return token.AccessToken
+	}
+	return idToken
+}
+
+func expiresSoon(token string, cutoff time.Time) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return false
+	}
+	return time.Unix(claims.Exp, 0).Before(cutoff)
 }
 
 // localRedirectTransport rewrites requests to localhost -> host.docker.internal
