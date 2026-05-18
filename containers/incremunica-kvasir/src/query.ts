@@ -99,10 +99,10 @@ export async function querySources(
     console.log("[QUERY] Static catch-up unavailable for this query shape; falling back to stream replay");
   }
 
-  const emitViewUpdate = (source?: string) => {
+  const emitViewUpdate = (source?: string, options: { force?: boolean; reason?: string } = {}) => {
     const now = Date.now();
     if (!counters.changedSinceLastLog) return;
-    if (now - counters.lastLogAt < MEASUREMENT_LOG_INTERVAL_MS) return;
+    if (!options.force && now - counters.lastLogAt < MEASUREMENT_LOG_INTERVAL_MS) return;
 
     counters.lastLogAt = now;
     counters.changedSinceLastLog = false;
@@ -113,6 +113,7 @@ export async function querySources(
       pod: source ?? "all",
       observations: source ? (counters.observationsBySource.get(source) ?? 0) : viewRowCount(view),
       source,
+      reason: options.reason ?? "stream_delta",
       view_unique: view.size,
       view_rows: viewRowCount(view),
       total_adds: counters.totalAdds,
@@ -285,6 +286,7 @@ export async function querySources(
         total_removes: counters.totalRemoves,
         source_resets: counters.sourceResets,
       });
+      emitViewUpdate(replay.source, { force: true, reason: "snapshot_reconciled" });
     });
   };
 
