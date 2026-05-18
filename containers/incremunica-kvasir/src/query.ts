@@ -4,7 +4,7 @@ import { Mutex } from "async-mutex";
 import { Agent } from "undici";
 import { materializedBindingKey } from "./identity.js";
 import { logMeasurement, viewRowCount } from "./measurement.js";
-import { copyReplaySnapshot, recordReplayAddition, replaySnapshotsEqual, type ReplaySnapshot } from "./replay.js";
+import { copyReplaySnapshot } from "./replay.js";
 
 const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
 const DEBUG_VIEW_EVENTS = process.env.DEBUG_VIEW_EVENTS === "1" || DEBUG_STREAM_EVENTS;
@@ -15,7 +15,6 @@ const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_
 const STREAM_FIRST_DATA_TIMEOUT_MS = parseInt(process.env.STREAM_FIRST_DATA_TIMEOUT_MS || "300000", 10);
 const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || "30000", 10);
 const STREAM_IDLE_TIMEOUT_MS = parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || "120000", 10);
-const STREAM_REPLAY_PRUNE_STALE = process.env.STREAM_REPLAY_PRUNE_STALE !== "0";
 
 const streamingDispatcher = new Agent({
   bodyTimeout: 0,
@@ -35,6 +34,7 @@ interface ReplayState {
   source: string;
   reconnectAttempt: number;
   seen: Map<string, number>;
+  bindings: Map<string, any>;
   settled: boolean;
   closed: boolean;
   settleTimer?: ReturnType<typeof setTimeout>;
@@ -59,7 +59,6 @@ export async function querySources(
     observationsBySource: new Map(),
   };
   const sourceContributions = new Map<string, Map<string, number>>();
-  const sourceReplaySnapshots = new Map<string, ReplaySnapshot>();
 
   console.log(`[QUERY] Preparing ${endpoints.length} endpoints`);
   const sources = endpoints.map(endpoint => {
@@ -129,30 +128,44 @@ export async function querySources(
     return removedCount;
   };
 
+  const addSourceContribution = (
+    source: string,
+    key: string,
+    bindings: any,
+    count: number,
+  ) => {
+    if (count <= 0) return 0;
+
+    const entry = view.get(key);
+    if (entry) {
+      entry.bindings = bindings;
+      entry.count += count;
+    } else {
+      view.set(key, { bindings, count });
+    }
+
+    const contributions = sourceContributions.get(source) ?? new Map<string, number>();
+    contributions.set(key, (contributions.get(key) ?? 0) + count);
+    sourceContributions.set(source, contributions);
+
+    counters.observationsBySource.set(
+      source,
+      (counters.observationsBySource.get(source) ?? 0) + count,
+    );
+
+    return count;
+  };
+
   const reconcileReplay = async (replay: ReplayState) => {
     if (replay.settled || replay.closed) return;
     replay.settled = true;
 
-    const contributions = sourceContributions.get(replay.source);
-    if (!contributions || contributions.size === 0) return;
-
     await mutex.runExclusive(() => {
-      let staleCandidateRows = 0;
       const replaySnapshot = copyReplaySnapshot(replay.seen);
-      const previousReplaySnapshot = sourceReplaySnapshots.get(replay.source);
-      const replayConfirmed = replaySnapshot.rows > 0 && replaySnapshotsEqual(previousReplaySnapshot, replaySnapshot);
-      const shouldPruneStale = STREAM_REPLAY_PRUNE_STALE && replayConfirmed;
 
-      for (const [key, count] of Array.from(contributions)) {
-        const replayCount = replay.seen.get(key) ?? 0;
-        if (replayCount >= count) continue;
-        staleCandidateRows += count - replayCount;
-      }
-
-      if (!shouldPruneStale) {
-        sourceReplaySnapshots.set(replay.source, replaySnapshot);
+      if (replaySnapshot.rows === 0) {
         if (DEBUG_VIEW_EVENTS) {
-          console.log(`[VIEW] Reconnect replay settled for ${replay.source}; ${staleCandidateRows} stale candidates kept (${replayConfirmed ? "pruning disabled" : "waiting for replay confirmation"})`);
+          console.log(`[VIEW] Empty reconnect replay settled for ${replay.source}; keeping current source rows`);
         }
         logMeasurement({
           stage: "t6",
@@ -161,11 +174,10 @@ export async function querySources(
           observations: counters.observationsBySource.get(replay.source) ?? 0,
           source: replay.source,
           reconnect_attempt: replay.reconnectAttempt,
+          added_rows: 0,
           removed_rows: 0,
-          stale_candidate_rows: staleCandidateRows,
           replay_rows: replaySnapshot.rows,
-          replay_confirmed: replayConfirmed,
-          prune_stale_enabled: STREAM_REPLAY_PRUNE_STALE,
+          snapshot_reconciled: false,
           view_unique: view.size,
           view_rows: viewRowCount(view),
           total_adds: counters.totalAdds,
@@ -175,44 +187,45 @@ export async function querySources(
         return;
       }
 
+      const previousContributions = new Map(sourceContributions.get(replay.source) ?? new Map<string, number>());
       let removedRows = 0;
-      for (const [key, count] of Array.from(contributions)) {
-        const replayCount = replay.seen.get(key) ?? 0;
-        if (replayCount >= count) continue;
-        removedRows += removeSourceContribution(replay.source, key, count - replayCount);
-      }
-      sourceReplaySnapshots.set(replay.source, replaySnapshot);
 
-      if (removedRows === 0) {
-        if (DEBUG_VIEW_EVENTS) {
-          console.log(`[VIEW] Reconnect replay settled for ${replay.source}; no stale rows removed`);
+      for (const [key, count] of previousContributions) {
+        const desiredCount = replay.seen.get(key) ?? 0;
+        if (count <= desiredCount) continue;
+        removedRows += removeSourceContribution(replay.source, key, count - desiredCount);
+      }
+
+      let addedRows = 0;
+      for (const [key, desiredCount] of replay.seen) {
+        const currentCount = previousContributions.get(key) ?? 0;
+        const bindings = replay.bindings.get(key);
+        if (!bindings) continue;
+
+        if (desiredCount > currentCount) {
+          addedRows += addSourceContribution(replay.source, key, bindings, desiredCount - currentCount);
+          continue;
         }
-        logMeasurement({
-          stage: "t6",
-          event: "source_replay_settled",
-          pod: replay.source,
-          observations: counters.observationsBySource.get(replay.source) ?? 0,
-          source: replay.source,
-          reconnect_attempt: replay.reconnectAttempt,
-          removed_rows: 0,
-          stale_candidate_rows: staleCandidateRows,
-          replay_rows: replaySnapshot.rows,
-          replay_confirmed: replayConfirmed,
-          prune_stale_enabled: STREAM_REPLAY_PRUNE_STALE,
-          view_unique: view.size,
-          view_rows: viewRowCount(view),
-          total_adds: counters.totalAdds,
-          total_removes: counters.totalRemoves,
-          source_resets: counters.sourceResets,
-        });
-        return;
+
+        const entry = view.get(key);
+        if (entry) {
+          entry.bindings = bindings;
+        } else {
+          addedRows += addSourceContribution(replay.source, key, bindings, desiredCount);
+        }
       }
 
-      counters.sourceResets++;
+      sourceContributions.set(replay.source, new Map(replay.seen));
+      counters.observationsBySource.set(replay.source, replaySnapshot.rows);
+      counters.totalAdds += addedRows;
+      counters.totalRemoves += removedRows;
+      if (addedRows > 0 || removedRows > 0) {
+        counters.sourceResets++;
+      }
       counters.changedSinceLastLog = true;
 
       if (DEBUG_VIEW_EVENTS) {
-        console.log(`[VIEW] Reconnect replay settled for ${replay.source}; removed ${removedRows} stale rows`);
+        console.log(`[VIEW] Reconnect replay reconciled for ${replay.source}; added ${addedRows}, removed ${removedRows}`);
       }
       logMeasurement({
         stage: "t6",
@@ -221,11 +234,10 @@ export async function querySources(
         observations: counters.observationsBySource.get(replay.source) ?? 0,
         source: replay.source,
         reconnect_attempt: replay.reconnectAttempt,
+        added_rows: addedRows,
         removed_rows: removedRows,
-        stale_candidate_rows: staleCandidateRows,
         replay_rows: replaySnapshot.rows,
-        replay_confirmed: replayConfirmed,
-        prune_stale_enabled: STREAM_REPLAY_PRUNE_STALE,
+        snapshot_reconciled: true,
         view_unique: view.size,
         view_rows: viewRowCount(view),
         total_adds: counters.totalAdds,
@@ -248,9 +260,17 @@ export async function querySources(
       await mutex.runExclusive(() => {
         const contributions = source ? (sourceContributions.get(source) ?? new Map<string, number>()) : undefined;
         const sourceCount = contributions?.get(key) ?? 0;
-        const effectiveSourceCount = stable ? Math.min(sourceCount, 1) : sourceCount;
 
-        if (stable && !activeReplay && sourceCount > 0) {
+        if (activeReplay) {
+          activeReplay.seen.set(key, (activeReplay.seen.get(key) ?? 0) + 1);
+          activeReplay.bindings.set(key, b);
+          if (DEBUG_VIEW_EVENTS) {
+            console.log(`[VIEW] Buffered reconnect replay row for ${source}`);
+          }
+          return;
+        }
+
+        if (stable && sourceCount > 0) {
           const entry = view.get(key);
           if (entry) {
             entry.bindings = b;
@@ -262,19 +282,6 @@ export async function querySources(
           }
           if (DEBUG_VIEW_EVENTS) {
             console.log(`[VIEW] Ignored duplicate stable add for ${source}`);
-          }
-          return;
-        }
-
-        let shouldMaterializeReplayAddition = true;
-        if (activeReplay) {
-          const replayDecision = recordReplayAddition(activeReplay.seen, key, effectiveSourceCount);
-          shouldMaterializeReplayAddition = replayDecision.shouldMaterialize;
-        }
-
-        if (activeReplay && !shouldMaterializeReplayAddition) {
-          if (DEBUG_VIEW_EVENTS) {
-            console.log(`[VIEW] Reconnect replay confirmed existing source row for ${source}`);
           }
           return;
         }
@@ -348,6 +355,7 @@ export async function querySources(
         source: source.value,
         reconnectAttempt,
         seen: new Map(),
+        bindings: new Map(),
         settled: false,
         closed: false,
       }
