@@ -3,6 +3,7 @@ import { isAddition } from '@incremunica/user-tools';
 import { Mutex } from "async-mutex";
 import { Agent } from "undici";
 import { logMeasurement, viewRowCount } from "./measurement.js";
+import { recordReplayAddition } from "./replay.js";
 
 const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
 const DEBUG_VIEW_EVENTS = process.env.DEBUG_VIEW_EVENTS === "1" || DEBUG_STREAM_EVENTS;
@@ -232,11 +233,13 @@ export async function querySources(
         const contributions = source ? (sourceContributions.get(source) ?? new Map<string, number>()) : undefined;
         const sourceCount = contributions?.get(key) ?? 0;
 
+        let shouldMaterializeReplayAddition = true;
         if (activeReplay) {
-          activeReplay.seen.set(key, (activeReplay.seen.get(key) ?? 0) + 1);
+          const replayDecision = recordReplayAddition(activeReplay.seen, key, sourceCount);
+          shouldMaterializeReplayAddition = replayDecision.shouldMaterialize;
         }
 
-        if (activeReplay && sourceCount > 0) {
+        if (activeReplay && !shouldMaterializeReplayAddition) {
           if (DEBUG_VIEW_EVENTS) {
             console.log(`[VIEW] Reconnect replay confirmed existing source row for ${source}`);
           }

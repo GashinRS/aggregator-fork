@@ -2,10 +2,11 @@
   "name": "incremunica-kvasir",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "tsc && node dist/replay.test.js"
   },
   "keywords": [],
   "author": "",
