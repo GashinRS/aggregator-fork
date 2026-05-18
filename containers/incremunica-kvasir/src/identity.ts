@@ -25,8 +25,10 @@ export function materializedBindingKey(binding: BindingLike, source?: string): M
     if (typeof term.value !== "string" || term.value.length === 0) continue;
 
     const termType = typeof term.termType === "string" ? term.termType : "term";
+    const sourceScope = source ?? "unknown-source";
+    const rowScope = termType === "NamedNode" ? binding.toString() : "";
     return {
-      key: ["stable", variable.value, termType, term.value].join("|"),
+      key: ["stable", sourceScope, variable.value, termType, term.value, rowScope].join("|"),
       stable: true,
     };
   }
