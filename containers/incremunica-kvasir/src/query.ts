@@ -35,6 +35,7 @@ interface ReplayState {
   reconnectAttempt: number;
   seen: Map<string, number>;
   bindings: Map<string, any>;
+  stableKeys: Set<string>;
   settled: boolean;
   closed: boolean;
   settleTimer?: ReturnType<typeof setTimeout>;
@@ -133,27 +134,29 @@ export async function querySources(
     key: string,
     bindings: any,
     count: number,
+    stable: boolean,
   ) => {
     if (count <= 0) return 0;
 
     const entry = view.get(key);
     if (entry) {
       entry.bindings = bindings;
-      entry.count += count;
+      entry.count = stable ? 1 : entry.count + count;
     } else {
-      view.set(key, { bindings, count });
+      view.set(key, { bindings, count: stable ? 1 : count });
     }
 
     const contributions = sourceContributions.get(source) ?? new Map<string, number>();
-    contributions.set(key, (contributions.get(key) ?? 0) + count);
+    contributions.set(key, stable ? 1 : (contributions.get(key) ?? 0) + count);
     sourceContributions.set(source, contributions);
 
+    const addedRows = stable ? 1 : count;
     counters.observationsBySource.set(
       source,
-      (counters.observationsBySource.get(source) ?? 0) + count,
+      (counters.observationsBySource.get(source) ?? 0) + addedRows,
     );
 
-    return count;
+    return addedRows;
   };
 
   const reconcileReplay = async (replay: ReplayState) => {
@@ -200,23 +203,36 @@ export async function querySources(
       for (const [key, desiredCount] of replay.seen) {
         const currentCount = previousContributions.get(key) ?? 0;
         const bindings = replay.bindings.get(key);
+        const stable = replay.stableKeys.has(key);
+        const targetCount = stable ? Math.min(desiredCount, 1) : desiredCount;
         if (!bindings) continue;
 
-        if (desiredCount > currentCount) {
-          addedRows += addSourceContribution(replay.source, key, bindings, desiredCount - currentCount);
+        if (targetCount > currentCount) {
+          addedRows += addSourceContribution(replay.source, key, bindings, targetCount - currentCount, stable);
           continue;
         }
 
         const entry = view.get(key);
         if (entry) {
           entry.bindings = bindings;
+          if (stable) {
+            entry.count = 1;
+          }
         } else {
-          addedRows += addSourceContribution(replay.source, key, bindings, desiredCount);
+          addedRows += addSourceContribution(replay.source, key, bindings, targetCount, stable);
         }
       }
 
-      sourceContributions.set(replay.source, new Map(replay.seen));
-      counters.observationsBySource.set(replay.source, replaySnapshot.rows);
+      const reconciledContributions = new Map<string, number>();
+      for (const [key, count] of replay.seen) {
+        reconciledContributions.set(key, replay.stableKeys.has(key) ? Math.min(count, 1) : count);
+      }
+      sourceContributions.set(replay.source, reconciledContributions);
+      let sourceRows = 0;
+      for (const count of reconciledContributions.values()) {
+        sourceRows += count;
+      }
+      counters.observationsBySource.set(replay.source, sourceRows);
       counters.totalAdds += addedRows;
       counters.totalRemoves += removedRows;
       if (addedRows > 0 || removedRows > 0) {
@@ -262,8 +278,11 @@ export async function querySources(
         const sourceCount = contributions?.get(key) ?? 0;
 
         if (activeReplay) {
-          activeReplay.seen.set(key, (activeReplay.seen.get(key) ?? 0) + 1);
+          activeReplay.seen.set(key, stable ? 1 : (activeReplay.seen.get(key) ?? 0) + 1);
           activeReplay.bindings.set(key, b);
+          if (stable) {
+            activeReplay.stableKeys.add(key);
+          }
           if (DEBUG_VIEW_EVENTS) {
             console.log(`[VIEW] Buffered reconnect replay row for ${source}`);
           }
@@ -356,6 +375,7 @@ export async function querySources(
         reconnectAttempt,
         seen: new Map(),
         bindings: new Map(),
+        stableKeys: new Set(),
         settled: false,
         closed: false,
       }
