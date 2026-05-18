@@ -23,10 +23,13 @@ const evalMediumPatients = Array.from({ length: 15 }, (_, index) => `eval-medium
 // Map each aggregator owner to the patients whose slice data they need to query.
 // Add another owner here if needed; the patient list itself is generated.
 const AGGREGATOR_OWNER_PATIENTS: Record<UserKey, UserKey[]> = {
-  //patient1: numberedPatients,
-  patient15: numberedPatients,
+  patient1: ['patient1,patient3,patient4,patient5,patient6,patient7,patient8,patient9,patient10,patient11,patient12,patient13,patient14'],
+  //patient15: numberedPatients,
   //"eval-low1": evalLowPatients,
+  //"eval-low1": ['eval-low8,eval-low9,eval-low10,eval-low11'],
   //"eval-medium1": evalMediumPatients,
+  //"teststream": ['teststream,teststream5'],
+  //"teststream": ['teststream,teststream5'],
 };
 
 function withoutTrailingSlash(value: string): string {
@@ -58,14 +61,15 @@ function configuredCredentials(user: UserKey): UserCredentials | undefined {
 }
 
 function credentialsFor(user: UserKey): UserCredentials {
-  if (/^(patient|eval-low|eval-medium)\d+$/.test(user)) {
+  const configured = configuredCredentials(user);
+
+  if (usesDefaultPatientPassword(user) || (!configured && isPolicyUser(user))) {
     return {
-      username: configuredCredentials(user)?.username ?? user,
+      username: configured?.username ?? user,
       password: DEFAULT_PATIENT_PASSWORD,
     };
   }
 
-  const configured = configuredCredentials(user);
   if (configured) {
     return configured;
   }
@@ -91,6 +95,26 @@ function sliceUrl(patient: UserKey): string {
 function policyName(owner: UserKey, patient: UserKey, endpoint: "Query" | "Changes"): string {
   const suffix = owner === patient ? "Owner" : "AggregatorOwner";
   return `${config.sliceName}_${patient}_${suffix}${endpoint}`.replace(/[^A-Za-z0-9_]/g, "_");
+}
+
+function usesDefaultPatientPassword(user: UserKey): boolean {
+  return /^(patient|eval-low|eval-medium)\d+$/.test(user);
+}
+
+function isPolicyUser(user: UserKey): boolean {
+  return Object.entries(AGGREGATOR_OWNER_PATIENTS).some(
+    ([owner, patients]) =>
+      owner === user || normalizedPatients(patients).includes(user)
+  );
+}
+
+function normalizedPatients(patients: UserKey[]): UserKey[] {
+  return patients.flatMap((patient) =>
+    patient
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+  );
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> {
@@ -175,7 +199,8 @@ async function setupPoliciesForPatient(owner: UserKey, patient: UserKey) {
 }
 
 async function main() {
-  for (const [owner, patients] of Object.entries(AGGREGATOR_OWNER_PATIENTS)) {
+  for (const [owner, rawPatients] of Object.entries(AGGREGATOR_OWNER_PATIENTS)) {
+    const patients = normalizedPatients(rawPatients);
     if (patients.length === 0) {
       continue;
     }
