@@ -40,7 +40,7 @@ type saref_Observation @class(iri: "saref:Observation") {
 }
 
 type Subscription {
-  saref_ObservationAdded: saref_Observation!
+  saref_ObservationAdded: [saref_Observation!]!
 }
 
 type Mutation {

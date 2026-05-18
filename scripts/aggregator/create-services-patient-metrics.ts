@@ -17,7 +17,7 @@ const TF = "/transformations";
 const SVC = "/services";
 const TF_ID = "IncrementalKvasir";
 const CREATED_STATUS_CODES = new Set([201, 202]);
-const SERVICE_REQUESTOR = "patient1";
+const SERVICE_REQUESTOR = "kronky4";
 const SERVICE_REQUESTOR_PASSWORD = DEFAULT_PATIENT_PASSWORD;
 // const SERVICE_CREATION_WAIT_MS = 30_000;
 const SERVICE_CREATION_WAIT_MS = 0;
@@ -140,11 +140,11 @@ const RAW_SERVICES: ServiceDefinition[] = [
   // { service: "smartphone-application", metric: "wear:smartphone.application" },
   // { service: "smartphone-keyboard", metric: "wear:smartphone.keyboard" },
   // { service: "weather-pressure", metric: "act:weather.pressure" },
-  { service: "smartphone-step", metric: "wear:smartphone.step" },
+  // { service: "smartphone-step", metric: "wear:smartphone.step" },
   // { service: "environment-open", metric: "act:environment.open" },
   // { service: "airquality-voc-total", metric: "act:airquality.voc_total" },
   // { service: "smartphone-proximity", metric: "wear:smartphone.proximity" },
-  { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
+  // { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
   // { service: "dyamand-airquality-co2", metric: "act:org.dyamand.types.airquality.CO2" },
   // { service: "atmospheric-pressure", metric: "act:org.dyamand.types.common.AtmosphericPressure" },
   // { service: "loudness", metric: "act:org.dyamand.types.common.Loudness" },
@@ -169,20 +169,20 @@ const RAW_SERVICES: ServiceDefinition[] = [
   // { service: "heart-rate", metric: "wear:org.dyamand.types.health.HeartRate" },
   // { service: "spo2", metric: "wear:org.dyamand.types.health.SpO2" },
   // { service: "load", metric: "act:org.dyamand.types.common.Load" },
-  { service: "body-temperature", metric: "wear:org.dyamand.types.health.BodyTemperature" },
-  { service: "diastolic-blood-pressure", metric: "wear:org.dyamand.types.health.DiastolicBloodPressure" },
-  { service: "systolic-blood-pressure", metric: "wear:org.dyamand.types.health.SystolicBloodPressure" },
+  // { service: "body-temperature", metric: "wear:org.dyamand.types.health.BodyTemperature" },
+  // { service: "diastolic-blood-pressure", metric: "wear:org.dyamand.types.health.DiastolicBloodPressure" },
+  // { service: "systolic-blood-pressure", metric: "wear:org.dyamand.types.health.SystolicBloodPressure" },
   // { service: "wearable-bvp", metric: "wear:wearable.bvp" },
   // { service: "wearable-gsr", metric: "wear:wearable.gsr" },
-  // { service: "wearable-skt", metric: "wear:wearable.skt" },
+  { service: "wearable-skt", metric: "wear:wearable.skt" },
   // { service: "wearable-ibi", metric: "wear:wearable.ibi" },
 ];
 
 const SAMPLED_SERVICES: ServiceDefinition[] = [
-  { service: "wearable-bvp", metric: "wear:wearable.bvp" },
-  { service: "wearable-gsr", metric: "wear:wearable.gsr" },
-  { service: "wearable-skt", metric: "wear:wearable.skt" },
-  { service: "wearable-ibi", metric: "wear:wearable.ibi" },
+  // { service: "wearable-bvp", metric: "wear:wearable.bvp" },
+  // { service: "wearable-gsr", metric: "wear:wearable.gsr" },
+  // { service: "wearable-skt", metric: "wear:wearable.skt" },
+  // { service: "wearable-ibi", metric: "wear:wearable.ibi" },
 ];
 
 const SCHEMA = `
@@ -200,7 +200,7 @@ type saref_Observation @class(iri: "saref:Observation") {
 }
 
 type Subscription {
-  saref_ObservationAdded: saref_Observation!
+  saref_ObservationAdded: [saref_Observation!]!
 }
 
 type Mutation {
@@ -246,12 +246,14 @@ PREFIX void: <http://rdfs.org/ns/void#>
 PREFIX wear: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndWearables/>
 PREFIX act: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndActuators/>
 
-SELECT ?dataset ?timestamp ?value
+SELECT ?id ?dataset ?timestamp ?value
 WHERE {
   ?obs saref:observes ${toSparqlMetric(metric)} ;
        saref:hasTimestamp ?timestamp ;
        saref:hasValue ?value ;
        void:inDataset ?dataset .
+
+  BIND(?obs AS ?id)
 }
 `;
 }
@@ -268,7 +270,7 @@ PREFIX wear: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndWearables/>
 PREFIX act: <https://dahcc.idlab.ugent.be/Homelab/SensorsAndActuators/>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-SELECT ?dataset ?year ?month ?day ?hour ?minuteBucket (SAMPLE(?timestamp) AS ?timestamp) (SAMPLE(?value) AS ?value)
+SELECT ?id ?dataset ?year ?month ?day ?hour ?minuteBucket (SAMPLE(?timestamp) AS ?timestamp) (SAMPLE(?value) AS ?value)
 WHERE {
   ?obs saref:observes ${toSparqlMetric(metric)} ;
        saref:hasTimestamp ?timestamp ;
@@ -280,8 +282,9 @@ WHERE {
   BIND(DAY(?timestamp) AS ?day)
   BIND(HOURS(?timestamp) AS ?hour)
   BIND((FLOOR(MINUTES(?timestamp) / ${SAMPLED_SERVICE_MINUTE_BUCKET_SIZE}) * ${SAMPLED_SERVICE_MINUTE_BUCKET_SIZE}) AS ?minuteBucket)
+  BIND(CONCAT(STR(?dataset), "|", STR(${toSparqlMetric(metric)}), "|", STR(?year), "-", STR(?month), "-", STR(?day), "T", STR(?hour), ":", STR(?minuteBucket)) AS ?id)
 }
-GROUP BY ?dataset ?year ?month ?day ?hour ?minuteBucket
+GROUP BY ?id ?dataset ?year ?month ?day ?hour ?minuteBucket
 ORDER BY ?dataset ?year ?month ?day ?hour ?minuteBucket
 `;
 }

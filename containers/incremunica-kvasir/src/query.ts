@@ -2,6 +2,7 @@ import { QueryEngine } from "@incremunica/query-sparql-incremental";
 import { isAddition } from '@incremunica/user-tools';
 import { Mutex } from "async-mutex";
 import { Agent } from "undici";
+import { materializedBindingKey } from "./identity.js";
 import { logMeasurement, viewRowCount } from "./measurement.js";
 import { copyReplaySnapshot, recordReplayAddition, replaySnapshotsEqual, type ReplaySnapshot } from "./replay.js";
 
@@ -235,7 +236,7 @@ export async function querySources(
   };
 
   const handleBinding = async (b: any, source?: string, replay?: ReplayState) => {
-    const key = b.toString();
+    const { key, stable } = materializedBindingKey(b, source);
     const addition = isAddition(b);
     const activeReplay = replay && !replay.settled && !replay.closed ? replay : undefined;
 
@@ -247,10 +248,27 @@ export async function querySources(
       await mutex.runExclusive(() => {
         const contributions = source ? (sourceContributions.get(source) ?? new Map<string, number>()) : undefined;
         const sourceCount = contributions?.get(key) ?? 0;
+        const effectiveSourceCount = stable ? Math.min(sourceCount, 1) : sourceCount;
+
+        if (stable && !activeReplay && sourceCount > 0) {
+          const entry = view.get(key);
+          if (entry) {
+            entry.bindings = b;
+            entry.count = 1;
+          }
+          if (contributions && source) {
+            contributions.set(key, 1);
+            sourceContributions.set(source, contributions);
+          }
+          if (DEBUG_VIEW_EVENTS) {
+            console.log(`[VIEW] Ignored duplicate stable add for ${source}`);
+          }
+          return;
+        }
 
         let shouldMaterializeReplayAddition = true;
         if (activeReplay) {
-          const replayDecision = recordReplayAddition(activeReplay.seen, key, sourceCount);
+          const replayDecision = recordReplayAddition(activeReplay.seen, key, effectiveSourceCount);
           shouldMaterializeReplayAddition = replayDecision.shouldMaterialize;
         }
 
@@ -263,7 +281,12 @@ export async function querySources(
 
         if (view.has(key)) {
           const entry = view.get(key)!;
-          entry.count++;
+          if (stable) {
+            entry.bindings = b;
+            entry.count = 1;
+          } else {
+            entry.count++;
+          }
           if (DEBUG_VIEW_EVENTS) {
             console.log(`[VIEW] Incremented count (${entry.count}) for key`);
           }
@@ -275,7 +298,7 @@ export async function querySources(
         }
 
         if (source && contributions) {
-          contributions.set(key, sourceCount + 1);
+          contributions.set(key, stable ? 1 : sourceCount + 1);
           sourceContributions.set(source, contributions);
         }
         counters.totalAdds++;
