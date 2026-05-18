@@ -3,7 +3,7 @@ import { isAddition } from '@incremunica/user-tools';
 import { Mutex } from "async-mutex";
 import { Agent } from "undici";
 import { logMeasurement, viewRowCount } from "./measurement.js";
-import { recordReplayAddition } from "./replay.js";
+import { copyReplaySnapshot, recordReplayAddition, replaySnapshotsEqual, type ReplaySnapshot } from "./replay.js";
 
 const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
 const DEBUG_VIEW_EVENTS = process.env.DEBUG_VIEW_EVENTS === "1" || DEBUG_STREAM_EVENTS;
@@ -14,7 +14,7 @@ const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_
 const STREAM_FIRST_DATA_TIMEOUT_MS = parseInt(process.env.STREAM_FIRST_DATA_TIMEOUT_MS || "300000", 10);
 const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || "30000", 10);
 const STREAM_IDLE_TIMEOUT_MS = parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || "120000", 10);
-const STREAM_REPLAY_PRUNE_STALE = process.env.STREAM_REPLAY_PRUNE_STALE === "1";
+const STREAM_REPLAY_PRUNE_STALE = process.env.STREAM_REPLAY_PRUNE_STALE !== "0";
 
 const streamingDispatcher = new Agent({
   bodyTimeout: 0,
@@ -58,6 +58,7 @@ export async function querySources(
     observationsBySource: new Map(),
   };
   const sourceContributions = new Map<string, Map<string, number>>();
+  const sourceReplaySnapshots = new Map<string, ReplaySnapshot>();
 
   console.log(`[QUERY] Preparing ${endpoints.length} endpoints`);
   const sources = endpoints.map(endpoint => {
@@ -135,22 +136,22 @@ export async function querySources(
     if (!contributions || contributions.size === 0) return;
 
     await mutex.runExclusive(() => {
-      let removedRows = 0;
       let staleCandidateRows = 0;
-      const replayRows = Array.from(replay.seen.values()).reduce((sum, count) => sum + count, 0);
+      const replaySnapshot = copyReplaySnapshot(replay.seen);
+      const previousReplaySnapshot = sourceReplaySnapshots.get(replay.source);
+      const replayConfirmed = replaySnapshot.rows > 0 && replaySnapshotsEqual(previousReplaySnapshot, replaySnapshot);
+      const shouldPruneStale = STREAM_REPLAY_PRUNE_STALE && replayConfirmed;
 
       for (const [key, count] of Array.from(contributions)) {
         const replayCount = replay.seen.get(key) ?? 0;
         if (replayCount >= count) continue;
         staleCandidateRows += count - replayCount;
-        if (STREAM_REPLAY_PRUNE_STALE) {
-          removedRows += removeSourceContribution(replay.source, key, count - replayCount);
-        }
       }
 
-      if (!STREAM_REPLAY_PRUNE_STALE) {
+      if (!shouldPruneStale) {
+        sourceReplaySnapshots.set(replay.source, replaySnapshot);
         if (DEBUG_VIEW_EVENTS) {
-          console.log(`[VIEW] Reconnect replay settled for ${replay.source}; ${staleCandidateRows} stale candidates kept`);
+          console.log(`[VIEW] Reconnect replay settled for ${replay.source}; ${staleCandidateRows} stale candidates kept (${replayConfirmed ? "pruning disabled" : "waiting for replay confirmation"})`);
         }
         logMeasurement({
           stage: "t6",
@@ -161,7 +162,9 @@ export async function querySources(
           reconnect_attempt: replay.reconnectAttempt,
           removed_rows: 0,
           stale_candidate_rows: staleCandidateRows,
-          replay_rows: replayRows,
+          replay_rows: replaySnapshot.rows,
+          replay_confirmed: replayConfirmed,
+          prune_stale_enabled: STREAM_REPLAY_PRUNE_STALE,
           view_unique: view.size,
           view_rows: viewRowCount(view),
           total_adds: counters.totalAdds,
@@ -170,6 +173,14 @@ export async function querySources(
         });
         return;
       }
+
+      let removedRows = 0;
+      for (const [key, count] of Array.from(contributions)) {
+        const replayCount = replay.seen.get(key) ?? 0;
+        if (replayCount >= count) continue;
+        removedRows += removeSourceContribution(replay.source, key, count - replayCount);
+      }
+      sourceReplaySnapshots.set(replay.source, replaySnapshot);
 
       if (removedRows === 0) {
         if (DEBUG_VIEW_EVENTS) {
@@ -184,7 +195,9 @@ export async function querySources(
           reconnect_attempt: replay.reconnectAttempt,
           removed_rows: 0,
           stale_candidate_rows: staleCandidateRows,
-          replay_rows: replayRows,
+          replay_rows: replaySnapshot.rows,
+          replay_confirmed: replayConfirmed,
+          prune_stale_enabled: STREAM_REPLAY_PRUNE_STALE,
           view_unique: view.size,
           view_rows: viewRowCount(view),
           total_adds: counters.totalAdds,
@@ -209,7 +222,9 @@ export async function querySources(
         reconnect_attempt: replay.reconnectAttempt,
         removed_rows: removedRows,
         stale_candidate_rows: staleCandidateRows,
-        replay_rows: replayRows,
+        replay_rows: replaySnapshot.rows,
+        replay_confirmed: replayConfirmed,
+        prune_stale_enabled: STREAM_REPLAY_PRUNE_STALE,
         view_unique: view.size,
         view_rows: viewRowCount(view),
         total_adds: counters.totalAdds,
