@@ -15,6 +15,12 @@ const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_
 const STREAM_FIRST_DATA_TIMEOUT_MS = parseInt(process.env.STREAM_FIRST_DATA_TIMEOUT_MS || "300000", 10);
 const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || "30000", 10);
 const STREAM_IDLE_TIMEOUT_MS = parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || "120000", 10);
+const STATIC_CATCHUP_ENABLED = process.env.STATIC_CATCHUP_ENABLED !== "0";
+const STATIC_CATCHUP_PAGE_SIZE = parseInt(process.env.STATIC_CATCHUP_PAGE_SIZE || "25000", 10);
+const STATIC_CATCHUP_MAX_PAGES = parseInt(process.env.STATIC_CATCHUP_MAX_PAGES || "1000", 10);
+
+const XSD_DATE_TIME = "http://www.w3.org/2001/XMLSchema#dateTime";
+const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 
 const streamingDispatcher = new Agent({
   bodyTimeout: 0,
@@ -39,6 +45,17 @@ interface ReplayState {
   settled: boolean;
   closed: boolean;
   settleTimer?: ReturnType<typeof setTimeout>;
+}
+
+interface ObservationStaticCatchupPlan {
+  metricToken: string;
+  metricIri: string;
+  graphqlFilterValue: string;
+}
+
+interface GraphQLPaginationInfo {
+  path?: unknown;
+  next?: unknown;
 }
 
 export async function querySources(
@@ -73,6 +90,12 @@ export async function querySources(
       }
     }
   });
+  const staticCatchupPlan = STATIC_CATCHUP_ENABLED ? buildObservationStaticCatchupPlan(query, context) : undefined;
+  if (staticCatchupPlan) {
+    console.log(`[QUERY] Static catch-up enabled for metric ${staticCatchupPlan.metricToken}`);
+  } else if (STATIC_CATCHUP_ENABLED) {
+    console.log("[QUERY] Static catch-up unavailable for this query shape; falling back to stream replay");
+  }
 
   const emitViewUpdate = (source?: string) => {
     const now = Date.now();
@@ -263,6 +286,106 @@ export async function querySources(
     });
   };
 
+  const runStaticCatchup = async (source: typeof sources[number], reconnectAttempt: number) => {
+    if (!staticCatchupPlan) return false;
+
+    const replay: ReplayState = {
+      source: source.value,
+      reconnectAttempt,
+      seen: new Map(),
+      bindings: new Map(),
+      stableKeys: new Set(),
+      settled: false,
+      closed: false,
+    };
+
+    logMeasurement({
+      stage: "t6",
+      event: "static_catchup_started",
+      pod: source.value,
+      observations: counters.observationsBySource.get(source.value) ?? 0,
+      source: source.value,
+      reconnect_attempt: reconnectAttempt,
+      page_size: STATIC_CATCHUP_PAGE_SIZE,
+      metric: staticCatchupPlan.metricToken,
+    });
+
+    try {
+      let cursor: string | undefined;
+      let page = 0;
+      do {
+        page++;
+        if (page > STATIC_CATCHUP_MAX_PAGES) {
+          throw new Error(`Static catch-up exceeded ${STATIC_CATCHUP_MAX_PAGES} pages`);
+        }
+
+        const graphqlQuery = buildObservationStaticCatchupQuery(staticCatchupPlan, cursor);
+        const response = await umaProxyFetch(source.value, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            "@context": context,
+            query: graphqlQuery,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Static catch-up query failed: ${response.status} ${response.statusText}`);
+        }
+
+        const body = await response.json() as any;
+        if (body.errors) {
+          throw new Error(`Static catch-up returned GraphQL errors: ${JSON.stringify(body.errors)}`);
+        }
+
+        const observations = Array.isArray(body?.data?.saref_Observation)
+          ? body.data.saref_Observation
+          : [];
+
+        for (const observation of observations) {
+          if (!observationMatchesMetric(observation, staticCatchupPlan)) continue;
+
+          const binding = observationToBinding(observation);
+          const { key, stable } = materializedBindingKey(binding, source.value);
+          replay.seen.set(key, stable ? 1 : (replay.seen.get(key) ?? 0) + 1);
+          replay.bindings.set(key, binding);
+          if (stable) {
+            replay.stableKeys.add(key);
+          }
+        }
+
+        cursor = findNextCursor(body?.extensions?.pagination);
+        logMeasurement({
+          stage: "t6",
+          event: "static_catchup_page",
+          pod: source.value,
+          observations: counters.observationsBySource.get(source.value) ?? 0,
+          source: source.value,
+          reconnect_attempt: reconnectAttempt,
+          page,
+          page_rows: observations.length,
+          replay_rows: replay.seen.size,
+          has_next: Boolean(cursor),
+        });
+      } while (cursor);
+
+      await reconcileReplay(replay);
+      return true;
+    } catch (err) {
+      console.error(`[STATIC] Catch-up failed for ${source.value}:`, err);
+      logMeasurement({
+        stage: "t6",
+        event: "static_catchup_error",
+        pod: source.value,
+        observations: counters.observationsBySource.get(source.value) ?? 0,
+        source: source.value,
+        reconnect_attempt: reconnectAttempt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  };
+
   const handleBinding = async (b: any, source?: string, replay?: ReplayState) => {
     const { key, stable } = materializedBindingKey(b, source);
     const addition = isAddition(b);
@@ -369,7 +492,7 @@ export async function querySources(
   const startSource = async (source: typeof sources[number], reconnectAttempt = 0): Promise<void> => {
     console.log(`[QUERY] Executing query for source: ${source.value}`);
 
-    const replay: ReplayState | undefined = reconnectAttempt > 0
+    const replay: ReplayState | undefined = reconnectAttempt > 0 && !staticCatchupPlan
       ? {
         source: source.value,
         reconnectAttempt,
@@ -556,7 +679,10 @@ export async function querySources(
     });
 
     setTimeout(() => {
-      void startSource(source, reconnectAttempt);
+      void (async () => {
+        await runStaticCatchup(source, reconnectAttempt);
+        await startSource(source, reconnectAttempt);
+      })();
     }, delay);
   };
 
@@ -612,6 +738,125 @@ export function materializedViewToSparqlJson(view: Map<string,{bindings: any, co
     head: { vars: [...variablesSet.keys()] },
     results: { bindings: results },
   };
+}
+
+function buildObservationStaticCatchupPlan(
+  sparqlQuery: string,
+  context: Record<string, string>,
+): ObservationStaticCatchupPlan | undefined {
+  if (/\bGROUP\s+BY\b/iu.test(sparqlQuery)) return undefined;
+  if (!/\bsaref:Observation\b|\bsaref_Observation\b/iu.test(sparqlQuery) && !/\bsaref:observes\b/iu.test(sparqlQuery)) {
+    return undefined;
+  }
+
+  const observesMatch = sparqlQuery.match(/\bsaref:observes\s+([^\s;]+)\s*;/iu);
+  if (!observesMatch?.[1]) return undefined;
+
+  const metricToken = observesMatch[1].trim();
+  const metricIri = expandIriToken(metricToken, context);
+  const graphqlFilterValue = compactIriForGraphqlFilter(metricIri, context) ?? metricToken;
+
+  return {
+    metricToken,
+    metricIri,
+    graphqlFilterValue,
+  };
+}
+
+function buildObservationStaticCatchupQuery(
+  plan: ObservationStaticCatchupPlan,
+  cursor?: string,
+): string {
+  const args = [`orderBy: ["id"]`, `pageSize: ${STATIC_CATCHUP_PAGE_SIZE}`];
+  if (cursor) {
+    args.push(`cursor: ${JSON.stringify(cursor)}`);
+  }
+
+  return `
+query {
+  saref_Observation(${args.join(", ")}) {
+    id
+    saref_hasTimestamp
+    saref_hasValue
+    void_inDataset
+    saref_observes @filter(if: "it==${plan.graphqlFilterValue}")
+  }
+}
+`;
+}
+
+function expandIriToken(token: string, context: Record<string, string>): string {
+  if (token.startsWith("<") && token.endsWith(">")) {
+    return token.slice(1, -1);
+  }
+
+  const [prefix, ...localParts] = token.split(":");
+  const local = localParts.join(":");
+  if (prefix && local && context[prefix]) {
+    return `${context[prefix]}${local}`;
+  }
+
+  return token;
+}
+
+function compactIriForGraphqlFilter(iri: string, context: Record<string, string>): string | undefined {
+  for (const [prefix, namespace] of Object.entries(context)) {
+    if (iri.startsWith(namespace)) {
+      return `${prefix}:${iri.slice(namespace.length)}`;
+    }
+  }
+
+  return undefined;
+}
+
+function observationMatchesMetric(observation: any, plan: ObservationStaticCatchupPlan): boolean {
+  const observes = Array.isArray(observation?.saref_observes)
+    ? observation.saref_observes
+    : observation?.saref_observes
+      ? [observation.saref_observes]
+      : [];
+
+  return observes.some((value: unknown) => value === plan.metricIri || value === plan.graphqlFilterValue || value === plan.metricToken);
+}
+
+function observationToBinding(observation: any): Map<{ value: string }, any> {
+  const dataset = firstValue(observation?.void_inDataset);
+  const binding = new Map<{ value: string }, any>();
+
+  binding.set({ value: "id" }, namedNode(String(observation.id)));
+  binding.set({ value: "dataset" }, namedNode(String(dataset ?? "")));
+  binding.set({ value: "timestamp" }, literal(String(observation.saref_hasTimestamp ?? ""), XSD_DATE_TIME));
+  binding.set({ value: "value" }, literal(String(observation.saref_hasValue ?? ""), XSD_STRING));
+
+  return binding;
+}
+
+function firstValue(value: unknown): unknown {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function namedNode(value: string) {
+  return {
+    termType: "NamedNode",
+    value,
+  };
+}
+
+function literal(value: string, datatype: string) {
+  return {
+    termType: "Literal",
+    value,
+    datatype: namedNode(datatype),
+    language: "",
+  };
+}
+
+function findNextCursor(pagination: unknown): string | undefined {
+  if (!Array.isArray(pagination)) return undefined;
+
+  const rootPage = pagination.find((page: GraphQLPaginationInfo) => page?.path === "/saref_Observation");
+  const candidate = rootPage ?? pagination.find((page: GraphQLPaginationInfo) => typeof page?.next === "string");
+  return typeof candidate?.next === "string" ? candidate.next : undefined;
 }
 
 // Retry configuration for transient UMA/proxy errors
