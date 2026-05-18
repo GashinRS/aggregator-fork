@@ -12,6 +12,8 @@ const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_
 const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_BACKOFF_FACTOR || "2");
 const STREAM_FIRST_DATA_TIMEOUT_MS = parseInt(process.env.STREAM_FIRST_DATA_TIMEOUT_MS || "300000", 10);
 const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || "30000", 10);
+const STREAM_IDLE_TIMEOUT_MS = parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || "120000", 10);
+const STREAM_REPLAY_PRUNE_STALE = process.env.STREAM_REPLAY_PRUNE_STALE === "1";
 
 const streamingDispatcher = new Agent({
   bodyTimeout: 0,
@@ -133,11 +135,39 @@ export async function querySources(
 
     await mutex.runExclusive(() => {
       let removedRows = 0;
+      let staleCandidateRows = 0;
+      const replayRows = Array.from(replay.seen.values()).reduce((sum, count) => sum + count, 0);
 
       for (const [key, count] of Array.from(contributions)) {
         const replayCount = replay.seen.get(key) ?? 0;
         if (replayCount >= count) continue;
-        removedRows += removeSourceContribution(replay.source, key, count - replayCount);
+        staleCandidateRows += count - replayCount;
+        if (STREAM_REPLAY_PRUNE_STALE) {
+          removedRows += removeSourceContribution(replay.source, key, count - replayCount);
+        }
+      }
+
+      if (!STREAM_REPLAY_PRUNE_STALE) {
+        if (DEBUG_VIEW_EVENTS) {
+          console.log(`[VIEW] Reconnect replay settled for ${replay.source}; ${staleCandidateRows} stale candidates kept`);
+        }
+        logMeasurement({
+          stage: "t6",
+          event: "source_replay_settled",
+          pod: replay.source,
+          observations: counters.observationsBySource.get(replay.source) ?? 0,
+          source: replay.source,
+          reconnect_attempt: replay.reconnectAttempt,
+          removed_rows: 0,
+          stale_candidate_rows: staleCandidateRows,
+          replay_rows: replayRows,
+          view_unique: view.size,
+          view_rows: viewRowCount(view),
+          total_adds: counters.totalAdds,
+          total_removes: counters.totalRemoves,
+          source_resets: counters.sourceResets,
+        });
+        return;
       }
 
       if (removedRows === 0) {
@@ -152,7 +182,8 @@ export async function querySources(
           source: replay.source,
           reconnect_attempt: replay.reconnectAttempt,
           removed_rows: 0,
-          replay_rows: Array.from(replay.seen.values()).reduce((sum, count) => sum + count, 0),
+          stale_candidate_rows: staleCandidateRows,
+          replay_rows: replayRows,
           view_unique: view.size,
           view_rows: viewRowCount(view),
           total_adds: counters.totalAdds,
@@ -176,7 +207,8 @@ export async function querySources(
         source: replay.source,
         reconnect_attempt: replay.reconnectAttempt,
         removed_rows: removedRows,
-        replay_rows: Array.from(replay.seen.values()).reduce((sum, count) => sum + count, 0),
+        stale_candidate_rows: staleCandidateRows,
+        replay_rows: replayRows,
         view_unique: view.size,
         view_rows: viewRowCount(view),
         total_adds: counters.totalAdds,
@@ -315,11 +347,18 @@ export async function querySources(
     let reconnectScheduled = false;
     let firstDataReceived = false;
     let firstDataTimeout: ReturnType<typeof setTimeout> | undefined;
+    let idleTimeout: ReturnType<typeof setTimeout> | undefined;
 
     const clearFirstDataTimeout = () => {
       if (!firstDataTimeout) return;
       clearTimeout(firstDataTimeout);
       firstDataTimeout = undefined;
+    };
+
+    const clearIdleTimeout = () => {
+      if (!idleTimeout) return;
+      clearTimeout(idleTimeout);
+      idleTimeout = undefined;
     };
 
     const clearReplaySettleTimer = () => {
@@ -337,10 +376,28 @@ export async function querySources(
       }, STREAM_REPLAY_SETTLE_MS);
     };
 
-    const closeAndReconnect = (reason: "end" | "error" | "idle", err?: unknown) => {
+    const destroyStream = (message: string) => {
+      const destroy = (bindingsStream as { destroy?: (error?: Error) => void }).destroy;
+      if (typeof destroy === "function") {
+        destroy.call(bindingsStream, new Error(message));
+      }
+    };
+
+    const scheduleIdleTimeout = () => {
+      if (STREAM_IDLE_TIMEOUT_MS <= 0) return;
+      clearIdleTimeout();
+      idleTimeout = setTimeout(() => {
+        idleTimeout = undefined;
+        destroyStream(`Stream idle timeout after ${STREAM_IDLE_TIMEOUT_MS}ms`);
+        closeAndReconnect("idle", undefined, STREAM_IDLE_TIMEOUT_MS);
+      }, STREAM_IDLE_TIMEOUT_MS);
+    };
+
+    const closeAndReconnect = (reason: "end" | "error" | "idle", err?: unknown, idleTimeoutMs = STREAM_FIRST_DATA_TIMEOUT_MS) => {
       if (reconnectScheduled) return;
       reconnectScheduled = true;
       clearFirstDataTimeout();
+      clearIdleTimeout();
       clearReplaySettleTimer();
       if (replay) {
         replay.closed = true;
@@ -357,7 +414,7 @@ export async function querySources(
           error: err instanceof Error ? err.message : String(err),
         });
       } else if (reason === "idle") {
-        console.warn(`[STREAM] No data received for ${source.value} within ${STREAM_FIRST_DATA_TIMEOUT_MS}ms, reconnecting`);
+        console.warn(`[STREAM] No data received for ${source.value} within ${idleTimeoutMs}ms, reconnecting`);
         logMeasurement({
           stage: "t6",
           event: "stream_idle_timeout",
@@ -365,7 +422,7 @@ export async function querySources(
           observations: counters.observationsBySource.get(source.value) ?? 0,
           source: source.value,
           reconnect_attempt: reconnectAttempt,
-          idle_timeout_ms: STREAM_FIRST_DATA_TIMEOUT_MS,
+          idle_timeout_ms: idleTimeoutMs,
         });
       } else {
         console.log(`[STREAM] Query stream ended for source: ${source.value}`);
@@ -390,6 +447,7 @@ export async function querySources(
         firstDataReceived = true;
         clearFirstDataTimeout();
       }
+      scheduleIdleTimeout();
       void handleBinding(binding, source.value, replay).then(() => {
         scheduleReplaySettle();
       });
@@ -405,10 +463,7 @@ export async function querySources(
 
     if (STREAM_FIRST_DATA_TIMEOUT_MS > 0) {
       firstDataTimeout = setTimeout(() => {
-        const destroy = (bindingsStream as { destroy?: (error?: Error) => void }).destroy;
-        if (typeof destroy === "function") {
-          destroy.call(bindingsStream, new Error(`Stream first data timeout after ${STREAM_FIRST_DATA_TIMEOUT_MS}ms`));
-        }
+        destroyStream(`Stream first data timeout after ${STREAM_FIRST_DATA_TIMEOUT_MS}ms`);
         closeAndReconnect("idle");
       }, STREAM_FIRST_DATA_TIMEOUT_MS);
     }

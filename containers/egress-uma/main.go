@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -201,6 +202,11 @@ func handleFetchRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if isSSE {
+		streamSSEByEvent(w, flusher, resp.Body)
+		return
+	}
+
 	buf := make([]byte, 1024)
 	for {
 		n, err := resp.Body.Read(buf)
@@ -216,6 +222,32 @@ func handleFetchRequest(w http.ResponseWriter, r *http.Request) {
 				logrus.WithError(err).Error("Error reading upstream")
 			}
 			break
+		}
+	}
+}
+
+func streamSSEByEvent(w http.ResponseWriter, flusher http.Flusher, body io.Reader) {
+	reader := bufio.NewReader(body)
+
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			if _, writeErr := w.Write(line); writeErr != nil {
+				logrus.WithError(writeErr).Error("Failed writing SSE event to downstream")
+				return
+			}
+
+			if bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n")) {
+				flusher.Flush()
+			}
+		}
+
+		if err != nil {
+			if err != io.EOF {
+				logrus.WithError(err).Error("Error reading upstream SSE")
+			}
+			flusher.Flush()
+			return
 		}
 	}
 }
