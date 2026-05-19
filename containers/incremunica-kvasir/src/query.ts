@@ -3,7 +3,7 @@ import { isAddition } from '@incremunica/user-tools';
 import { Mutex } from "async-mutex";
 import { Agent } from "undici";
 import { materializedBindingKey } from "./identity.js";
-import { logMeasurement, viewRowCount } from "./measurement.js";
+import { logMeasurement, newestObservationTimestamp, viewRowCount } from "./measurement.js";
 import { copyReplaySnapshot } from "./replay.js";
 
 const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
@@ -18,7 +18,6 @@ const STREAM_IDLE_TIMEOUT_MS = parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || "1
 const STATIC_CATCHUP_ENABLED = process.env.STATIC_CATCHUP_ENABLED !== "0";
 const STATIC_CATCHUP_PAGE_SIZE = parseInt(process.env.STATIC_CATCHUP_PAGE_SIZE || "25000", 10);
 const STATIC_CATCHUP_MAX_PAGES = parseInt(process.env.STATIC_CATCHUP_MAX_PAGES || "1000", 10);
-const STATIC_CATCHUP_INTERVAL_MS = parseInt(process.env.STATIC_CATCHUP_INTERVAL_MS || "60000", 10);
 
 const XSD_DATE_TIME = "http://www.w3.org/2001/XMLSchema#dateTime";
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
@@ -114,6 +113,7 @@ export async function querySources(
       observations: source ? (counters.observationsBySource.get(source) ?? 0) : viewRowCount(view),
       source,
       reason: options.reason ?? "stream_delta",
+      newest_observation_timestamp: newestObservationTimestamp(view),
       view_unique: view.size,
       view_rows: viewRowCount(view),
       total_adds: counters.totalAdds,
@@ -207,6 +207,7 @@ export async function querySources(
           removed_rows: 0,
           replay_rows: replaySnapshot.rows,
           snapshot_reconciled: false,
+          newest_observation_timestamp: newestObservationTimestamp(view),
           view_unique: view.size,
           view_rows: viewRowCount(view),
           total_adds: counters.totalAdds,
@@ -280,6 +281,7 @@ export async function querySources(
         removed_rows: removedRows,
         replay_rows: replaySnapshot.rows,
         snapshot_reconciled: true,
+        newest_observation_timestamp: newestObservationTimestamp(view),
         view_unique: view.size,
         view_rows: viewRowCount(view),
         total_adds: counters.totalAdds,
@@ -635,6 +637,7 @@ export async function querySources(
           source: source.value,
           reconnect_attempt: reconnectAttempt,
           idle_timeout_ms: idleTimeoutMs,
+          newest_observation_timestamp: newestObservationTimestamp(view),
         });
       } else {
         console.log(`[STREAM] Query stream ended for source: ${source.value}`);
@@ -644,6 +647,7 @@ export async function querySources(
           pod: source.value,
           observations: counters.observationsBySource.get(source.value) ?? 0,
           source: source.value,
+          newest_observation_timestamp: newestObservationTimestamp(view),
           view_unique: view.size,
           view_rows: viewRowCount(view),
           total_adds: counters.totalAdds,
@@ -711,13 +715,6 @@ export async function querySources(
   }
 
   await Promise.all(sources.map(source => startSource(source)));
-  if (staticCatchupPlan && STATIC_CATCHUP_INTERVAL_MS > 0) {
-    for (const source of sources) {
-      setInterval(() => {
-        void runStaticCatchup(source, 0);
-      }, STATIC_CATCHUP_INTERVAL_MS);
-    }
-  }
 }
 
 export function materializedViewToSparqlJson(view: Map<string,{bindings: any, count: number}>) {
