@@ -3,10 +3,6 @@ import { Buffer } from "node:buffer";
 import { appendFileSync, writeFileSync } from "node:fs";
 import { KeycloakOIDCAuth } from "../util.js";
 import { config } from "../config.js";
-import { DEFAULT_PATIENT_PASSWORD } from "./kvasir-patients.js";
-
-const POLL_REQUESTOR = "kronky4";
-const POLL_REQUESTOR_PASSWORD = DEFAULT_PATIENT_PASSWORD;
 
 const WORKLOADS: Record<string, string[]> = {
   W1: [
@@ -48,6 +44,9 @@ const SERVICE_METRICS: Record<string, string> = {
 };
 
 interface Options {
+  user: string;
+  password: string;
+  aggregatorId: string;
   svcNames: string[];
   outputNames: string[];
   intervalMs: number;
@@ -178,6 +177,17 @@ function sleep(ms: number): Promise<void> {
 }
 
 function readOptions(): Options {
+  const user = getArg("--user") ?? process.env.POLL_USER;
+  const aggregatorId = getArg("--aggregator-id") ?? process.env.POLL_AGGREGATOR_ID;
+  const password = getArg("--password") ?? process.env.POLL_PASSWORD ?? "pass";
+
+  if (!user) {
+    throw new Error("Missing required --user option, e.g. --user kronky4");
+  }
+  if (!aggregatorId) {
+    throw new Error("Missing required --aggregator-id option, e.g. --aggregator-id 5146dde1-d4e0-46fa-9d0c-d05576165e9e");
+  }
+
   const count = getArg("--count");
   const parsedCount = count ? Number(count) : Number.POSITIVE_INFINITY;
   if (count && (!Number.isFinite(parsedCount) || parsedCount < 1)) {
@@ -195,6 +205,9 @@ function readOptions(): Options {
   }
 
   return {
+    user,
+    password,
+    aggregatorId,
     svcNames,
     outputNames,
     intervalMs: parseDurationMs(getArg("--interval"), 60_000),
@@ -272,7 +285,8 @@ async function pollEndpoint(
     run_id: opts.runId,
     stage: opts.description ? "service_description_read" : "t7",
     event: "poll_result",
-    aggregator: config.aggregatorId,
+    aggregator: opts.aggregatorId,
+    requestor: opts.user,
     workload: opts.workload,
     service: svcName,
     metric: metricForService(svcName),
@@ -316,12 +330,13 @@ async function main() {
   if (opts.outFile) writeFileSync(opts.outFile, "", "utf8");
 
   console.error("=== Initializing Keycloak Authentication ===");
-  console.error(`Poll requestor: ${POLL_REQUESTOR}`);
+  console.error(`Poll requestor: ${opts.user}`);
+  console.error(`Aggregator id: ${opts.aggregatorId}`);
   const auth = new KeycloakOIDCAuth();
   await auth.init(config.idp, config.realm);
   await auth.login(
-    POLL_REQUESTOR,
-    POLL_REQUESTOR_PASSWORD,
+    opts.user,
+    opts.password,
     config.clientId,
     config.clientSecret,
   );
@@ -339,7 +354,7 @@ async function main() {
 
     await Promise.all(opts.svcNames.map((svcName, index) => {
       const outputName = outputForService(opts, index);
-      const serviceEndpoint = `${config.aggregatorServer}/${config.aggregatorId}/${svcName}`;
+      const serviceEndpoint = `${config.aggregatorServer}/${opts.aggregatorId}/${svcName}`;
       const outputEndpoint = `${serviceEndpoint}/${outputName}`;
       const endpoint = opts.description ? serviceEndpoint : outputEndpoint;
 
