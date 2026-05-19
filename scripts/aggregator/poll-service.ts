@@ -228,9 +228,9 @@ function logMeasurement(opts: Options, event: Record<string, unknown>) {
 
   if (opts.outFile) {
     appendFileSync(opts.outFile, `${line}\n`, "utf8");
-  } else {
-    console.log(line);
   }
+
+  console.log(line);
 }
 
 function outputForService(opts: Options, index: number): string {
