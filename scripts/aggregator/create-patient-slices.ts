@@ -56,6 +56,19 @@ input SarefObservationInput @class(iri: "saref:Observation") {
   void_inDataset: [ID] @predicate(iri: "void:inDataset")
 }`;
 
+function sliceBody() {
+  return {
+    "@context": CONTEXT,
+    "kss:name": SLICE_NAME,
+    "kss:description": SLICE_DESCRIPTION,
+    "kss:schema": {
+      "@type": "kss:EmbeddedSliceSchema",
+      "kss:sdl": SCHEMA,
+    },
+    "kss:tags": [],
+  };
+}
+
 function withoutTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
@@ -94,7 +107,8 @@ function credentialsFor(user: string): UserCredentials {
 async function createSliceForPatient(client: string, server: string): Promise<string> {
   const credentials = credentialsFor(client);
   const podUrl = `${withoutTrailingSlash(server)}/${credentials.username}`;
-  const sliceUri = `${podUrl}/slices`;
+  const slicesUri = `${podUrl}/slices`;
+  const sliceUri = `${slicesUri}/${SLICE_NAME}`;
   const kvasir = new KvasirManagement(podUrl, umaServerForPolicyRegistration());
 
   await kvasir.init(config.idp, config.realm);
@@ -105,35 +119,41 @@ async function createSliceForPatient(client: string, server: string): Promise<st
     config.clientSecret
   );
 
-  const response = await fetch(sliceUri, {
+  const authorization = `Bearer ${await kvasir.auth.getAccessToken()}`;
+  const response = await fetch(slicesUri, {
     method: "POST",
     headers: {
       "Content-Type": "application/ld+json",
-      Authorization: `Bearer ${await kvasir.auth.getAccessToken()}`,
+      Authorization: authorization,
     },
-    body: JSON.stringify({
-      "@context": CONTEXT,
-      "kss:name": SLICE_NAME,
-      "kss:description": SLICE_DESCRIPTION,
-      "kss:schema": {
-        "@type": "kss:EmbeddedSliceSchema",
-        "kss:sdl": SCHEMA,
-      },
-      "kss:tags": [],
-    }),
+    body: JSON.stringify(sliceBody()),
   });
 
   if (!response.ok) {
     if (response.status === 409) {
-      console.log("Slice already exists");
-      return `${sliceUri}/${SLICE_NAME}`;
+      console.log(`Slice already exists; updating ${sliceUri}`);
+      const updateResponse = await fetch(sliceUri, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/ld+json",
+          Authorization: authorization,
+        },
+        body: JSON.stringify(sliceBody()),
+      });
+
+      if (!updateResponse.ok) {
+        throw new Error(`Error updating slice ${updateResponse.status}: ${await updateResponse.text()}`);
+      }
+
+      console.log(`Slice updated ${updateResponse.status}`);
+      return sliceUri;
     }
 
     throw new Error(`Error registering slice ${response.status}: ${await response.text()}`);
   }
 
   console.log(`Slice registered ${response.status}`);
-  return `${sliceUri}/${SLICE_NAME}`;
+  return sliceUri;
 }
 
 async function main() {
