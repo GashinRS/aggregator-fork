@@ -3,6 +3,10 @@ import { Buffer } from "node:buffer";
 import { appendFileSync, writeFileSync } from "node:fs";
 import { KeycloakOIDCAuth } from "../util.js";
 import { config } from "../config.js";
+import { DEFAULT_PATIENT_PASSWORD } from "./kvasir-patients.js";
+
+const POLL_REQUESTOR = "kronky4";
+const POLL_REQUESTOR_PASSWORD = DEFAULT_PATIENT_PASSWORD;
 
 const WORKLOADS: Record<string, string[]> = {
   W1: [
@@ -28,6 +32,19 @@ const WORKLOADS: Record<string, string[]> = {
     "wearable-skt",
     "wearable-bvp",
   ],
+  TEST: [
+    "wearable-bvp",
+    "wearable-ibi",
+  ],
+};
+
+const SERVICE_METRICS: Record<string, string> = {
+  "smartphone-step": "wear:smartphone.step",
+  "aqura-location-state": "act:org.dyamand.aqura.AquraLocationState_Protego_User",
+  "wearable-bvp": "wear:wearable.bvp",
+  "wearable-gsr": "wear:wearable.gsr",
+  "wearable-ibi": "wear:wearable.ibi",
+  "wearable-skt": "wear:wearable.skt",
 };
 
 interface Options {
@@ -68,6 +85,16 @@ function servicesForWorkload(workload: string): string[] {
   return services;
 }
 
+function metricForService(service: string): string {
+  return SERVICE_METRICS[service] ?? service;
+}
+
+interface SparqlBindingValue {
+  value?: unknown;
+}
+
+type SparqlResultRow = Record<string, SparqlBindingValue | undefined>;
+
 function parseDurationMs(value: string | undefined, fallbackMs: number): number {
   if (!value) return fallbackMs;
 
@@ -84,21 +111,31 @@ function parseDurationMs(value: string | undefined, fallbackMs: number): number 
   return amount;
 }
 
+function sparqlBindings(parsed: unknown): SparqlResultRow[] | undefined {
+  const bindings = (parsed as { results?: { bindings?: unknown } })?.results?.bindings;
+  return Array.isArray(bindings) ? bindings as SparqlResultRow[] : undefined;
+}
+
+function resultRows(parsed: unknown): unknown[] | undefined {
+  const bindings = sparqlBindings(parsed);
+  if (bindings) return bindings;
+  if (Array.isArray(parsed)) return parsed;
+
+  const data = (parsed as { data?: Record<string, unknown> })?.data;
+  if (!data || typeof data !== "object") return undefined;
+
+  const firstArray = Object.values(data).find(Array.isArray);
+  return firstArray as unknown[] | undefined;
+}
+
 function parseRowCount(body: string): number | null {
   try {
-    const parsed = JSON.parse(body);
-    const bindings = parsed?.results?.bindings;
-    return Array.isArray(bindings) ? bindings.length : null;
+    const rows = resultRows(JSON.parse(body));
+    return rows?.length ?? null;
   } catch {
     return null;
   }
 }
-
-interface SparqlBindingValue {
-  value?: unknown;
-}
-
-type SparqlResultRow = Record<string, SparqlBindingValue | undefined>;
 
 function datasetValue(row: SparqlResultRow): string | undefined {
   const exactBinding = row.dataset ?? row.inDataset ?? row.void_inDataset;
@@ -120,17 +157,17 @@ function parseObservationCounts(body: string): { total: number | null; byPod: Ma
 
   try {
     const parsed = JSON.parse(body);
-    const bindings = parsed?.results?.bindings;
-    if (!Array.isArray(bindings)) return { total: null, byPod };
+    const rows = resultRows(parsed);
+    if (!rows) return { total: null, byPod };
 
-    for (const row of bindings) {
+    for (const row of rows) {
       if (!row || typeof row !== "object") continue;
 
       const pod = datasetValue(row as SparqlResultRow) ?? "unknown";
       byPod.set(pod, (byPod.get(pod) ?? 0) + 1);
     }
 
-    return { total: bindings.length, byPod };
+    return { total: rows.length, byPod };
   } catch {
     return { total: null, byPod };
   }
@@ -216,6 +253,9 @@ async function pollEndpoint(
 
     const body = await response.text();
     responseBytes = Buffer.byteLength(body, "utf8");
+    if (!response.ok) {
+      error = body.slice(0, 500);
+    }
 
     if (!opts.description) {
       const parseStarted = performance.now();
@@ -235,6 +275,7 @@ async function pollEndpoint(
     aggregator: config.aggregatorId,
     workload: opts.workload,
     service: svcName,
+    metric: metricForService(svcName),
     output: opts.description ? undefined : outputName,
     endpoint,
     poll,
@@ -255,13 +296,15 @@ async function pollEndpoint(
       logMeasurement(opts, {
         ...commonEvent,
         pod,
+        patient: pod,
         observations,
       });
     }
   } else {
     logMeasurement(opts, {
       ...commonEvent,
-      pod: opts.description ? endpoint : "unknown",
+      pod: opts.description ? endpoint : "all",
+      patient: opts.description ? endpoint : "all",
       observations: rows ?? 0,
     });
   }
@@ -273,11 +316,12 @@ async function main() {
   if (opts.outFile) writeFileSync(opts.outFile, "", "utf8");
 
   console.error("=== Initializing Keycloak Authentication ===");
+  console.error(`Poll requestor: ${POLL_REQUESTOR}`);
   const auth = new KeycloakOIDCAuth();
   await auth.init(config.idp, config.realm);
   await auth.login(
-    config.patient1.username,
-    config.patient1.password,
+    POLL_REQUESTOR,
+    POLL_REQUESTOR_PASSWORD,
     config.clientId,
     config.clientSecret,
   );
