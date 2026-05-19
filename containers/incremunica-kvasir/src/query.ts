@@ -8,7 +8,7 @@ import { copyReplaySnapshot } from "./replay.js";
 
 const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
 const DEBUG_VIEW_EVENTS = process.env.DEBUG_VIEW_EVENTS === "1" || DEBUG_STREAM_EVENTS;
-const MEASUREMENT_LOG_INTERVAL_MS = parseInt(process.env.MEASUREMENT_LOG_INTERVAL_MS || "1000", 10);
+const MEASUREMENT_LOG_INTERVAL_MS = parseInt(process.env.MEASUREMENT_LOG_INTERVAL_MS || "0", 10);
 const STREAM_RECONNECT_INITIAL_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_INITIAL_DELAY_MS || "1000", 10);
 const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_DELAY_MS || "30000", 10);
 const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_BACKOFF_FACTOR || "2");
@@ -101,7 +101,7 @@ export async function querySources(
   const emitViewUpdate = (source?: string, options: { force?: boolean; reason?: string } = {}) => {
     const now = Date.now();
     if (!counters.changedSinceLastLog) return;
-    if (!options.force && now - counters.lastLogAt < MEASUREMENT_LOG_INTERVAL_MS) return;
+    if (!options.force && MEASUREMENT_LOG_INTERVAL_MS > 0 && now - counters.lastLogAt < MEASUREMENT_LOG_INTERVAL_MS) return;
 
     counters.lastLogAt = now;
     counters.changedSinceLastLog = false;
