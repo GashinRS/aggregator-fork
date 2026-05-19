@@ -28,6 +28,10 @@ export interface Config {
   bob: UserConfig;
   patient1: UserConfig;
   patient2: UserConfig;
+  patient3: UserConfig;
+  patient5: UserConfig;
+  patient6: UserConfig;
+  patient30: UserConfig;
   /** Default service name used by aggregator scripts */
   svcName: string;
   /** Shared JSON-LD context for Kvasir queries */
@@ -39,12 +43,17 @@ export interface Config {
 }
 
 export const config: Config = {
-  aggregatorServer: "https://aggregator.local:5443",
-  aggregatorId: "8820464d-790b-43e7-a551-f6c718bd8e25",
-  sliceName: "test",
+  // aggregatorServer: "https://aggregator.local:5443",
+  // aggregatorId: "dc671ab8-e059-4c00-bcb4-cd0cea3c9b95",
+  // kvasirServer: "http://localhost:8080",
+  // asServer: "http://localhost:4000/uma",
+  // idp: "http://localhost:8280",
+  aggregatorServer: "https://aggregator.10.10.220.153.sslip.io",
+  aggregatorId: "68633ea9-c5b1-4d22-957e-96d2cb128e9f",
   kvasirServer: "http://localhost:8080",
-  asServer: "http://localhost:4000/uma",
-  idp: "http://localhost:8280",
+  asServer: "https://10.10.220.153/uma",
+  idp: "https://10.10.220.153/auth",
+  sliceName: "data",
   realm: "kvasir",
   clientId: "demo-client",
   clientSecret: "demo-secret",
@@ -60,7 +69,7 @@ export const config: Config = {
   },
   patient1: {
     username: "patient1",
-    password: "patient1",
+    password: "pass",
     userId: "754d6330-184f-4620-b7ed-c1ec080cd208",
   },
   patient2: {
@@ -68,7 +77,27 @@ export const config: Config = {
     password: "patient2",
     userId: "e583a70e-3d6f-45ea-bffc-2a3cd9f58197",
   },
-  svcName: "test3",
+  patient3: {
+    username: "patient3",
+    password: "pass",
+    userId: "e583a70e-3d6f-45ea-bffc-2a3cd9f58197",
+  },
+  patient5: {
+    username: "patient5",
+    password: "pass",
+    userId: "e583a70e-3d6f-45ea-bffc-2a3cd9f58197",
+  },
+  patient6: {
+    username: "patient6",
+    password: "pass",
+    userId: "e583a70e-3d6f-45ea-bffc-2a3cd9f58197",
+  },
+  patient30: {
+    username: "patient30",
+    password: "pass",
+    userId: "e583a70e-3d6f-45ea-bffc-2a3cd9f58197",
+  },
+  svcName: "wearable-bvp",
   context: {
     kss: "https://kvasir.discover.ilabt.imec.be/vocab#",
     schema: "http://schema.org/",
