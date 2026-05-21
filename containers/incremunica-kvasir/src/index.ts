@@ -1,7 +1,7 @@
 import { querySources, materializedViewToSparqlJson } from "./query.js";
 import Fastify from "fastify";
 import { Mutex } from "async-mutex";
-import { logMeasurement, newestObservationTimestamp, viewRowCount } from "./measurement.js";
+import { logMeasurement, viewRowCount } from "./measurement.js";
 
 async function main() {
   console.log("[BOOT] Starting application...");
@@ -95,7 +95,6 @@ async function main() {
           pod: "all",
           observations: rows,
           request_ip: request.ip,
-          newest_observation_timestamp: newestObservationTimestamp(view),
           view_unique: view.size,
           view_rows: viewRowCount(view),
           result_rows: rows,

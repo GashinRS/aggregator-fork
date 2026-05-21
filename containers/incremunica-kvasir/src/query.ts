@@ -3,7 +3,7 @@ import { isAddition } from '@incremunica/user-tools';
 import { Mutex } from "async-mutex";
 import { Agent } from "undici";
 import { materializedBindingKey } from "./identity.js";
-import { logMeasurement, newestObservationTimestamp, viewRowCount } from "./measurement.js";
+import { logMeasurement, viewRowCount } from "./measurement.js";
 import { copyReplaySnapshot } from "./replay.js";
 
 const DEBUG_STREAM_EVENTS = process.env.DEBUG_STREAM_EVENTS === "1";
@@ -113,7 +113,6 @@ export async function querySources(
       observations: source ? (counters.observationsBySource.get(source) ?? 0) : viewRowCount(view),
       source,
       reason: options.reason ?? "stream_delta",
-      newest_observation_timestamp: newestObservationTimestamp(view),
       view_unique: view.size,
       view_rows: viewRowCount(view),
       total_adds: counters.totalAdds,
@@ -238,7 +237,6 @@ export async function querySources(
         page,
         added_rows: addedRows,
         replay_rows: copyReplaySnapshot(replay.seen).rows,
-        newest_observation_timestamp: newestObservationTimestamp(view),
         view_unique: view.size,
         view_rows: viewRowCount(view),
         total_adds: counters.totalAdds,
@@ -271,7 +269,6 @@ export async function querySources(
           removed_rows: 0,
           replay_rows: replaySnapshot.rows,
           snapshot_reconciled: false,
-          newest_observation_timestamp: newestObservationTimestamp(view),
           view_unique: view.size,
           view_rows: viewRowCount(view),
           total_adds: counters.totalAdds,
@@ -345,7 +342,6 @@ export async function querySources(
         removed_rows: removedRows,
         replay_rows: replaySnapshot.rows,
         snapshot_reconciled: true,
-        newest_observation_timestamp: newestObservationTimestamp(view),
         view_unique: view.size,
         view_rows: viewRowCount(view),
         total_adds: counters.totalAdds,
@@ -465,7 +461,6 @@ export async function querySources(
         reconnect_attempt: reconnectAttempt,
         pages: page,
         replay_rows: copyReplaySnapshot(replay.seen).rows,
-        newest_observation_timestamp: newestObservationTimestamp(view),
         view_unique: view.size,
         view_rows: viewRowCount(view),
         total_adds: counters.totalAdds,
@@ -726,7 +721,6 @@ export async function querySources(
           source: source.value,
           reconnect_attempt: reconnectAttempt,
           idle_timeout_ms: idleTimeoutMs,
-          newest_observation_timestamp: newestObservationTimestamp(view),
         });
       } else {
         console.log(`[STREAM] Query stream ended for source: ${source.value}`);
@@ -736,7 +730,6 @@ export async function querySources(
           pod: source.value,
           observations: counters.observationsBySource.get(source.value) ?? 0,
           source: source.value,
-          newest_observation_timestamp: newestObservationTimestamp(view),
           view_unique: view.size,
           view_rows: viewRowCount(view),
           total_adds: counters.totalAdds,
