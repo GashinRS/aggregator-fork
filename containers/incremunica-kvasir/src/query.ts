@@ -185,6 +185,70 @@ export async function querySources(
     return addedRows;
   };
 
+  const applyReplayProgress = async (
+    replay: ReplayState,
+    pageEntries: Map<string, { bindings: any; count: number; stable: boolean }>,
+    page: number,
+  ) => {
+    if (pageEntries.size === 0) return;
+
+    await mutex.runExclusive(() => {
+      const contributions = sourceContributions.get(replay.source) ?? new Map<string, number>();
+      let addedRows = 0;
+
+      for (const [key, pageEntry] of pageEntries) {
+        const desiredCount = replay.stableKeys.has(key)
+          ? 1
+          : (replay.seen.get(key) ?? pageEntry.count);
+        const currentCount = contributions.get(key) ?? 0;
+        const missingCount = desiredCount - currentCount;
+
+        if (missingCount <= 0) {
+          const viewEntry = view.get(key);
+          if (viewEntry) {
+            viewEntry.bindings = pageEntry.bindings;
+            if (pageEntry.stable) {
+              viewEntry.count = 1;
+            }
+          }
+          continue;
+        }
+
+        addedRows += addSourceContribution(
+          replay.source,
+          key,
+          pageEntry.bindings,
+          missingCount,
+          pageEntry.stable,
+        );
+      }
+
+      if (addedRows === 0) return;
+
+      counters.totalAdds += addedRows;
+      counters.changedSinceLastLog = true;
+
+      logMeasurement({
+        stage: "t6",
+        event: "static_catchup_progress",
+        pod: replay.source,
+        observations: counters.observationsBySource.get(replay.source) ?? 0,
+        source: replay.source,
+        reconnect_attempt: replay.reconnectAttempt,
+        page,
+        added_rows: addedRows,
+        replay_rows: copyReplaySnapshot(replay.seen).rows,
+        newest_observation_timestamp: newestObservationTimestamp(view),
+        view_unique: view.size,
+        view_rows: viewRowCount(view),
+        total_adds: counters.totalAdds,
+        total_removes: counters.totalRemoves,
+        source_resets: counters.sourceResets,
+      });
+      emitViewUpdate(replay.source, { force: true, reason: "static_catchup_progress" });
+    });
+  };
+
   const reconcileReplay = async (replay: ReplayState) => {
     if (replay.settled || replay.closed) return;
     replay.settled = true;
@@ -354,6 +418,7 @@ export async function querySources(
         const observations = Array.isArray(body?.data?.saref_Observation)
           ? body.data.saref_Observation
           : [];
+        const pageEntries = new Map<string, { bindings: any; count: number; stable: boolean }>();
 
         for (const observation of observations) {
           if (!observationMatchesMetric(observation, staticCatchupPlan)) continue;
@@ -365,7 +430,15 @@ export async function querySources(
           if (stable) {
             replay.stableKeys.add(key);
           }
+          const currentPageEntry = pageEntries.get(key);
+          pageEntries.set(key, {
+            bindings: binding,
+            count: stable ? 1 : (currentPageEntry?.count ?? 0) + 1,
+            stable,
+          });
         }
+
+        await applyReplayProgress(replay, pageEntries, page);
 
         cursor = findNextCursor(body?.extensions?.pagination);
         logMeasurement({
@@ -383,6 +456,22 @@ export async function querySources(
       } while (cursor);
 
       await reconcileReplay(replay);
+      logMeasurement({
+        stage: "t6",
+        event: "static_catchup_completed",
+        pod: source.value,
+        observations: counters.observationsBySource.get(source.value) ?? 0,
+        source: source.value,
+        reconnect_attempt: reconnectAttempt,
+        pages: page,
+        replay_rows: copyReplaySnapshot(replay.seen).rows,
+        newest_observation_timestamp: newestObservationTimestamp(view),
+        view_unique: view.size,
+        view_rows: viewRowCount(view),
+        total_adds: counters.totalAdds,
+        total_removes: counters.totalRemoves,
+        source_resets: counters.sourceResets,
+      });
       return true;
     } catch (err) {
       console.error(`[STATIC] Catch-up failed for ${source.value}:`, err);
