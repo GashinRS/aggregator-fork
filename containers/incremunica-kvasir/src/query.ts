@@ -437,10 +437,11 @@ export async function querySources(
         await applyReplayProgress(replay, pageEntries, page);
 
         cursor = findNextCursor(body?.extensions?.pagination);
-        if (!cursor && observations.length >= STATIC_CATCHUP_PAGE_SIZE) {
-          console.warn("[STATIC] Full page without next cursor", {
+        if (!cursor) {
+          console.warn("[STATIC] Page ended without next cursor", {
             page,
             pageRows: observations.length,
+            pageSize: STATIC_CATCHUP_PAGE_SIZE,
             extensionKeys: Object.keys(body?.extensions ?? {}),
             pagination: body?.extensions?.pagination,
           });
