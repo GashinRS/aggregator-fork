@@ -17,8 +17,8 @@ const TF = "/transformations";
 const SVC = "/services";
 const TF_ID = "IncrementalKvasir";
 const CREATED_STATUS_CODES = new Set([201, 202]);
-const SERVICE_REQUESTOR = "kronky4";
-const SERVICE_REQUESTOR_PASSWORD = DEFAULT_PATIENT_PASSWORD;
+const SERVICE_REQUESTOR = process.env.SERVICE_REQUESTOR ?? "patient1";
+const SERVICE_REQUESTOR_PASSWORD = process.env.SERVICE_REQUESTOR_PASSWORD ?? DEFAULT_PATIENT_PASSWORD;
 // const SERVICE_CREATION_WAIT_MS = 30_000;
 const SERVICE_CREATION_WAIT_MS = 0;
 const SAMPLED_SERVICE_MINUTE_BUCKET_SIZE = 1;
@@ -80,6 +80,20 @@ function selectedKvasirPatientSources(): {
   return { sources, requested };
 }
 
+function requestedServices(): Set<string> | undefined {
+  const services = process.env.AGGREGATOR_SERVICES
+    ?.split(",")
+    .map((service) => service.trim())
+    .filter(Boolean);
+
+  return services && services.length > 0 ? new Set(services) : undefined;
+}
+
+function filterServices(services: ServiceDefinition[], requested: Set<string> | undefined): ServiceDefinition[] {
+  if (!requested) return services;
+  return services.filter(({ service }) => requested.has(service));
+}
+
 function sourceList(sources: KvasirPatientSource[]): string {
   return sources
     .map(({ client, server }) => `${withoutTrailingSlash(server)}/${client}/slices/${config.sliceName}/query`)
@@ -104,85 +118,85 @@ function formatDuration(ms: number): string {
 // - act:* for Homelab/SensorsAndActuators metrics
 // - <full IRI> for metric names that are not legal SPARQL prefixed names
 const RAW_SERVICES: ServiceDefinition[] = [
-  // { service: "smartphone-acceleration-x", metric: "wear:smartphone.acceleration.x" },
-  // { service: "smartphone-acceleration-y", metric: "wear:smartphone.acceleration.y" },
-  // { service: "smartphone-acceleration-z", metric: "wear:smartphone.acceleration.z" },
-  // { service: "smartphone-magnetometer-x", metric: "wear:smartphone.magnetometer.x" },
-  // { service: "smartphone-magnetometer-y", metric: "wear:smartphone.magnetometer.y" },
-  // { service: "smartphone-magnetometer-z", metric: "wear:smartphone.magnetometer.z" },
-  // { service: "smartphone-gravity-x", metric: "wear:smartphone.gravity.x" },
-  // { service: "smartphone-gravity-y", metric: "wear:smartphone.gravity.y" },
-  // { service: "smartphone-gravity-z", metric: "wear:smartphone.gravity.z" },
-  // { service: "smartphone-gyroscope-x", metric: "wear:smartphone.gyroscope.x" },
-  // { service: "smartphone-gyroscope-y", metric: "wear:smartphone.gyroscope.y" },
-  // { service: "smartphone-gyroscope-z", metric: "wear:smartphone.gyroscope.z" },
-  // { service: "smartphone-linear-acceleration-x", metric: "wear:smartphone.linear_acceleration.x" },
-  // { service: "smartphone-linear-acceleration-y", metric: "wear:smartphone.linear_acceleration.y" },
-  // { service: "smartphone-linear-acceleration-z", metric: "wear:smartphone.linear_acceleration.z" },
-  // { service: "smartphone-rotation-x", metric: "wear:smartphone.rotation.x" },
-  // { service: "smartphone-rotation-y", metric: "wear:smartphone.rotation.y" },
-  // { service: "smartphone-rotation-z", metric: "wear:smartphone.rotation.z" },
-  // { service: "wearable-acceleration-x", metric: "wear:wearable.acceleration.x" },
-  // { service: "wearable-acceleration-y", metric: "wear:wearable.acceleration.y" },
-  // { service: "wearable-acceleration-z", metric: "wear:wearable.acceleration.z" },
-  // { service: "energy-consumption", metric: "act:energy.consumption" },
-  // { service: "energy-power", metric: "act:energy.power" },
-  // { service: "environment-light", metric: "act:environment.light" },
-  // { service: "environment-temperature", metric: "act:environment.temperature" },
-  // { service: "people-presence-detected", metric: "act:people.presence.detected" },
-  // { service: "mqtt-last-message", metric: "act:mqtt.lastMessage" },
-  // { service: "people-presence-number-detected", metric: "act:people.presence.numberDetected" },
-  // { service: "environment-motion", metric: "act:environment.motion" },
-  // { service: "smartphone-ambient-light", metric: "wear:smartphone.ambient_light" },
-  // { service: "environment-voltage", metric: "act:environment.voltage" },
-  // { service: "environment-relativehumidity", metric: "act:environment.relativehumidity" },
-  // { service: "airquality-co2", metric: "act:airquality.co2" },
-  // { service: "smartphone-application", metric: "wear:smartphone.application" },
-  // { service: "smartphone-keyboard", metric: "wear:smartphone.keyboard" },
-  // { service: "weather-pressure", metric: "act:weather.pressure" },
-  // { service: "smartphone-step", metric: "wear:smartphone.step" },
-  // { service: "environment-open", metric: "act:environment.open" },
-  // { service: "airquality-voc-total", metric: "act:airquality.voc_total" },
-  // { service: "smartphone-proximity", metric: "wear:smartphone.proximity" },
-  // { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
-  // { service: "dyamand-airquality-co2", metric: "act:org.dyamand.types.airquality.CO2" },
-  // { service: "atmospheric-pressure", metric: "act:org.dyamand.types.common.AtmosphericPressure" },
-  // { service: "loudness", metric: "act:org.dyamand.types.common.Loudness" },
-  // { service: "relative-humidity", metric: "act:org.dyamand.types.common.RelativeHumidity" },
-  // { service: "temperature", metric: "act:org.dyamand.types.common.Temperature" },
-  // { service: "water-running", metric: "<https://dahcc.idlab.ugent.be/Homelab/SensorsAndActuators/environment.waterRunning::bool>" },
-  // { service: "environment-lightswitch", metric: "act:environment.lightswitch" },
-  // { service: "weather-rainrate", metric: "act:weather.rainrate" },
-  // { service: "weather-windspeed", metric: "act:weather.windspeed" },
-  // { service: "environment-relay", metric: "act:environment.relay" },
-  // { service: "environment-button", metric: "act:environment.button" },
-  // { service: "wearable-battery-level", metric: "wear:wearable.battery_level" },
-  // { service: "smartphone-screen", metric: "wear:smartphone.screen" },
-  // { service: "environment-blind", metric: "act:environment.blind" },
-  // { service: "wearable-on-wrist", metric: "wear:wearable.on_wrist" },
-  // { service: "smartphone-location-accuracy", metric: "wear:smartphone.location.accuracy" },
-  // { service: "smartphone-location-altitude", metric: "wear:smartphone.location.altitude" },
-  // { service: "smartphone-location-bearing", metric: "wear:smartphone.location.bearing" },
-  // { service: "smartphone-location-latitude", metric: "wear:smartphone.location.latitude" },
-  // { service: "smartphone-location-longitude", metric: "wear:smartphone.location.longitude" },
-  // { service: "environment-dimmer", metric: "act:environment.dimmer" },
-  // { service: "heart-rate", metric: "wear:org.dyamand.types.health.HeartRate" },
-  // { service: "spo2", metric: "wear:org.dyamand.types.health.SpO2" },
-  // { service: "load", metric: "act:org.dyamand.types.common.Load" },
-  // { service: "body-temperature", metric: "wear:org.dyamand.types.health.BodyTemperature" },
-  // { service: "diastolic-blood-pressure", metric: "wear:org.dyamand.types.health.DiastolicBloodPressure" },
-  // { service: "systolic-blood-pressure", metric: "wear:org.dyamand.types.health.SystolicBloodPressure" },
-  // { service: "wearable-bvp", metric: "wear:wearable.bvp" },
-  // { service: "wearable-gsr", metric: "wear:wearable.gsr" },
+  { service: "smartphone-acceleration-x", metric: "wear:smartphone.acceleration.x" },
+  { service: "smartphone-acceleration-y", metric: "wear:smartphone.acceleration.y" },
+  { service: "smartphone-acceleration-z", metric: "wear:smartphone.acceleration.z" },
+  { service: "smartphone-magnetometer-x", metric: "wear:smartphone.magnetometer.x" },
+  { service: "smartphone-magnetometer-y", metric: "wear:smartphone.magnetometer.y" },
+  { service: "smartphone-magnetometer-z", metric: "wear:smartphone.magnetometer.z" },
+  { service: "smartphone-gravity-x", metric: "wear:smartphone.gravity.x" },
+  { service: "smartphone-gravity-y", metric: "wear:smartphone.gravity.y" },
+  { service: "smartphone-gravity-z", metric: "wear:smartphone.gravity.z" },
+  { service: "smartphone-gyroscope-x", metric: "wear:smartphone.gyroscope.x" },
+  { service: "smartphone-gyroscope-y", metric: "wear:smartphone.gyroscope.y" },
+  { service: "smartphone-gyroscope-z", metric: "wear:smartphone.gyroscope.z" },
+  { service: "smartphone-linear-acceleration-x", metric: "wear:smartphone.linear_acceleration.x" },
+  { service: "smartphone-linear-acceleration-y", metric: "wear:smartphone.linear_acceleration.y" },
+  { service: "smartphone-linear-acceleration-z", metric: "wear:smartphone.linear_acceleration.z" },
+  { service: "smartphone-rotation-x", metric: "wear:smartphone.rotation.x" },
+  { service: "smartphone-rotation-y", metric: "wear:smartphone.rotation.y" },
+  { service: "smartphone-rotation-z", metric: "wear:smartphone.rotation.z" },
+  { service: "wearable-acceleration-x", metric: "wear:wearable.acceleration.x" },
+  { service: "wearable-acceleration-y", metric: "wear:wearable.acceleration.y" },
+  { service: "wearable-acceleration-z", metric: "wear:wearable.acceleration.z" },
+  { service: "energy-consumption", metric: "act:energy.consumption" },
+  { service: "energy-power", metric: "act:energy.power" },
+  { service: "environment-light", metric: "act:environment.light" },
+  { service: "environment-temperature", metric: "act:environment.temperature" },
+  { service: "people-presence-detected", metric: "act:people.presence.detected" },
+  { service: "mqtt-last-message", metric: "act:mqtt.lastMessage" },
+  { service: "people-presence-number-detected", metric: "act:people.presence.numberDetected" },
+  { service: "environment-motion", metric: "act:environment.motion" },
+  { service: "smartphone-ambient-light", metric: "wear:smartphone.ambient_light" },
+  { service: "environment-voltage", metric: "act:environment.voltage" },
+  { service: "environment-relativehumidity", metric: "act:environment.relativehumidity" },
+  { service: "airquality-co2", metric: "act:airquality.co2" },
+  { service: "smartphone-application", metric: "wear:smartphone.application" },
+  { service: "smartphone-keyboard", metric: "wear:smartphone.keyboard" },
+  { service: "weather-pressure", metric: "act:weather.pressure" },
+  { service: "environment-open", metric: "act:environment.open" },
+  { service: "airquality-voc-total", metric: "act:airquality.voc_total" },
+  { service: "smartphone-proximity", metric: "wear:smartphone.proximity" },
+  { service: "dyamand-airquality-co2", metric: "act:org.dyamand.types.airquality.CO2" },
+  { service: "atmospheric-pressure", metric: "act:org.dyamand.types.common.AtmosphericPressure" },
+  { service: "loudness", metric: "act:org.dyamand.types.common.Loudness" },
+  { service: "relative-humidity", metric: "act:org.dyamand.types.common.RelativeHumidity" },
+  { service: "temperature", metric: "act:org.dyamand.types.common.Temperature" },
+  { service: "water-running", metric: "<https://dahcc.idlab.ugent.be/Homelab/SensorsAndActuators/environment.waterRunning::bool>" },
+  { service: "environment-lightswitch", metric: "act:environment.lightswitch" },
+  { service: "weather-rainrate", metric: "act:weather.rainrate" },
+  { service: "weather-windspeed", metric: "act:weather.windspeed" },
+  { service: "environment-relay", metric: "act:environment.relay" },
+  { service: "environment-button", metric: "act:environment.button" },
+  { service: "smartphone-screen", metric: "wear:smartphone.screen" },
+  { service: "environment-blind", metric: "act:environment.blind" },
+  { service: "wearable-on-wrist", metric: "wear:wearable.on_wrist" },
+  { service: "smartphone-location-accuracy", metric: "wear:smartphone.location.accuracy" },
+  { service: "smartphone-location-altitude", metric: "wear:smartphone.location.altitude" },
+  { service: "smartphone-location-bearing", metric: "wear:smartphone.location.bearing" },
+  { service: "smartphone-location-latitude", metric: "wear:smartphone.location.latitude" },
+  { service: "smartphone-location-longitude", metric: "wear:smartphone.location.longitude" },
+  { service: "environment-dimmer", metric: "act:environment.dimmer" },
+  { service: "heart-rate", metric: "wear:org.dyamand.types.health.HeartRate" },
+  { service: "spo2", metric: "wear:org.dyamand.types.health.SpO2" },
+  { service: "load", metric: "act:org.dyamand.types.common.Load" },
+  { service: "aqura-location-state", metric: "act:org.dyamand.aqura.AquraLocationState_Protego_User" },
+  { service: "wearable-battery-level", metric: "wear:wearable.battery_level" },
+  { service: "smartphone-step", metric: "wear:smartphone.step" },
+  { service: "body-temperature", metric: "wear:org.dyamand.types.health.BodyTemperature" },
+  { service: "diastolic-blood-pressure", metric: "wear:org.dyamand.types.health.DiastolicBloodPressure" },
+  { service: "systolic-blood-pressure", metric: "wear:org.dyamand.types.health.SystolicBloodPressure" },
+  { service: "wearable-bvp", metric: "wear:wearable.bvp" },
+  { service: "wearable-gsr", metric: "wear:wearable.gsr" },
   { service: "wearable-skt", metric: "wear:wearable.skt" },
-  // { service: "wearable-ibi", metric: "wear:wearable.ibi" },
+  { service: "wearable-ibi", metric: "wear:wearable.ibi" },
 ];
 
 const SAMPLED_SERVICES: ServiceDefinition[] = [
-  // { service: "wearable-bvp", metric: "wear:wearable.bvp" },
-  // { service: "wearable-gsr", metric: "wear:wearable.gsr" },
-  // { service: "wearable-skt", metric: "wear:wearable.skt" },
-  // { service: "wearable-ibi", metric: "wear:wearable.ibi" },
+  { service: "wearable-bvp-sampled", metric: "wear:wearable.bvp" },
+  { service: "wearable-gsr-sampled", metric: "wear:wearable.gsr" },
+  { service: "wearable-skt", metric: "wear:wearable.skt" },
+  { service: "wearable-ibi", metric: "wear:wearable.ibi" },
 ];
 
 const SCHEMA = `
@@ -376,13 +390,24 @@ async function parseServiceRequest(
 }
 
 async function main() {
-  const totalServices = RAW_SERVICES.length + SAMPLED_SERVICES.length;
+  const requestedServiceSet = requestedServices();
+  const rawServices = filterServices(RAW_SERVICES, requestedServiceSet);
+  const sampledServices = filterServices(SAMPLED_SERVICES, requestedServiceSet);
+  const foundServices = new Set([...rawServices, ...sampledServices].map(({ service }) => service));
+  if (requestedServiceSet) {
+    const missing = [...requestedServiceSet].filter((service) => !foundServices.has(service));
+    if (missing.length > 0) {
+      throw new Error(`Requested services are not configured in create-services-patient-metrics.ts: ${missing.join(", ")}`);
+    }
+  }
+
+  const totalServices = rawServices.length + sampledServices.length;
   const servicesToCreate = [
-    ...RAW_SERVICES.map((definition) => ({
+    ...rawServices.map((definition) => ({
       ...definition,
       query: metricQuery(definition.metric),
     })),
-    ...SAMPLED_SERVICES.map((definition) => ({
+    ...sampledServices.map((definition) => ({
       ...definition,
       query: sampledMetricQuery(definition.metric),
     })),
@@ -398,6 +423,9 @@ async function main() {
   console.log(`=== [${timestamp()}] Creating services from ${selected.sources.length} Kvasir patient sources ===`);
   if (selected.requested) {
     console.log(`[${timestamp()}] Patient filter: ${selected.requested.join(", ")}`);
+  }
+  if (requestedServiceSet) {
+    console.log(`[${timestamp()}] Service filter: ${[...requestedServiceSet].join(", ")}`);
   }
   console.log(`[${timestamp()}] Service requestor: ${SERVICE_REQUESTOR}`);
   console.log(`[${timestamp()}] Wait between service creations: ${SERVICE_CREATION_WAIT_MS}ms`);
@@ -438,7 +466,7 @@ async function main() {
   }
 
   console.log(
-    `=== [${timestamp()}] Finished ${totalServices} services in ${formatDuration(Date.now() - runStartedAt)} (${created} created, ${failed.length} failed; ${RAW_SERVICES.length} raw, ${SAMPLED_SERVICES.length} sampled) ===`
+    `=== [${timestamp()}] Finished ${totalServices} services in ${formatDuration(Date.now() - runStartedAt)} (${created} created, ${failed.length} failed; ${rawServices.length} raw, ${sampledServices.length} sampled) ===`
   );
 
   if (failed.length > 0) {
