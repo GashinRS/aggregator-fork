@@ -12,7 +12,8 @@ import {
 const df = new DataFactory();
 
 const AGGREGATOR_SERVER = config.aggregatorServer;
-const AGGREGATOR = `${config.aggregatorServer}/${config.aggregatorId}`;
+const AGGREGATOR_ID = process.env.AGGREGATOR_ID ?? config.aggregatorId;
+const AGGREGATOR = `${config.aggregatorServer}/${AGGREGATOR_ID}`;
 const TF = "/transformations";
 const SVC = "/services";
 const TF_ID = "IncrementalKvasir";
