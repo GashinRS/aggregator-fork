@@ -4,10 +4,84 @@ export type KvasirPatientSource = {
 };
 
 export const DEFAULT_PATIENT_PASSWORD = "pass";
-export const DEFAULT_KVASIR_PATIENT_COUNT = 30;
-const DEFAULT_EVAL_GROUP_SIZE = 15;
+export const DEFAULT_KVASIR_PATIENT_COUNT = 31;
+const EVAL_LOW_PATIENT_COUNT = 31;
+const EVAL_MEDIUM_PATIENT_COUNT = 31;
 
-const EXTRA_KVASIR_PATIENT_SOURCES: KvasirPatientSource[] = [];
+const EXTRA_KVASIR_PATIENT_SOURCES: KvasirPatientSource[] = [
+  {
+    client: "teststream",
+    server: "https://10.10.220.125",
+  },
+  {
+    client: "kronky4",
+    server: "https://10.10.223.11",
+  },
+  {
+    client: "kronky5",
+    server: "https://10.10.216.12",
+  },
+  {
+    client: "kronky6",
+    server: "https://10.10.218.59",
+  },
+  {
+    client: "rorii6",
+    server: "https://10.10.218.59",
+  },
+  {
+    client: "rorii7",
+    server: "https://10.10.218.183",
+  },
+  {
+    client: "alice",
+    server: "https://10.10.218.50",
+  },
+  {
+    client: "kronker1",
+    server: "https://10.10.218.50",
+  },
+  {
+    client: "kronker2",
+    server: "https://10.10.220.123",
+  },
+  {
+    client: "newtest31",
+    server: "https://10.10.217.141",
+  },
+  {
+    client: "newtest1",
+    server: "https://10.10.220.125",
+  },
+  {
+    client: "newtest3",
+    server: "https://10.10.223.39",
+  },
+  {
+    client: "newtest4",
+    server: "https://10.10.223.11",
+  },
+  {
+    client: "newtest5",
+    server: "https://10.10.216.12",
+  },
+  {
+    client: "newtest6",
+    server: "https://10.10.218.59",
+  },
+  {
+    client: "newtest7",
+    server: "https://10.10.218.183",
+  },
+  {
+    client: "newtest1",
+    server: "https://10.10.220.125",
+  },
+  {
+    client: "newtest31-2",
+    server: "https://10.10.217.141",
+  },
+];
 
 const KVASIR_SERVER_IPS: Record<number, string> = {
   1: "10.10.220.125",
@@ -81,6 +155,12 @@ function sourceFor(client: string, kvasirIndex: number): KvasirPatientSource {
   };
 }
 
+function evalSourceFor(client: string, index: number): KvasirPatientSource {
+  const serverCount = Object.keys(KVASIR_SERVER_IPS).length;
+  const kvasirIndex = ((index - 1) % serverCount) + 1;
+  return sourceFor(client, kvasirIndex);
+}
+
 function numberedPatientSources(count: number): KvasirPatientSource[] {
   return Array.from({ length: count }, (_, index) => {
     const patientNumber = index + 1;
@@ -89,11 +169,11 @@ function numberedPatientSources(count: number): KvasirPatientSource[] {
 }
 
 function evalPatientSources(): KvasirPatientSource[] {
-  const low = Array.from({ length: DEFAULT_EVAL_GROUP_SIZE }, (_, index) =>
-    sourceFor(`eval-low${index + 1}`, index + 1)
+  const low = Array.from({ length: EVAL_LOW_PATIENT_COUNT }, (_, index) =>
+    evalSourceFor(`eval-low${index + 1}`, index + 1)
   );
-  const medium = Array.from({ length: DEFAULT_EVAL_GROUP_SIZE }, (_, index) =>
-    sourceFor(`eval-medium${index + 1}`, index + 1 + DEFAULT_EVAL_GROUP_SIZE)
+  const medium = Array.from({ length: EVAL_MEDIUM_PATIENT_COUNT }, (_, index) =>
+    evalSourceFor(`eval-medium${index + 1}`, index + 1)
   );
 
   return [...low, ...medium];
