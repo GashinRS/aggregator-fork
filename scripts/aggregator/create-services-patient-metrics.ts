@@ -351,6 +351,29 @@ async function createService(
     responseText = await response.text();
   }
 
+  if (response.status === 500 && responseText.includes("Failed to create service from request")) {
+    const serviceEndpoint = `${AGGREGATOR}/${name}`;
+    console.log(`=== [${timestamp()}] Create returned 500; checking whether "${name}" is registered at ${serviceEndpoint} ===`);
+
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        const checkResponse = await umaFetch(serviceEndpoint, { method: "HEAD" });
+        console.log(`=== [${timestamp()}] Registration check ${attempt}/5 for "${name}": ${checkResponse.status} ===`);
+        if (checkResponse.ok) {
+          console.log(`=== [${timestamp()}] Treating "${name}" as created because the service endpoint is reachable ===`);
+          return;
+        }
+      } catch (error) {
+        console.error(`=== [${timestamp()}] Registration check ${attempt}/5 for "${name}" failed ===`);
+        console.error(error);
+      }
+
+      if (attempt < 5) {
+        await sleep(1000);
+      }
+    }
+  }
+
   if (CREATED_STATUS_CODES.has(response.status)) {
     console.log(`=== [${timestamp()}] Created "${name}" in ${formatDuration(Date.now() - startedAt)} ===`);
     console.log(responseText);
