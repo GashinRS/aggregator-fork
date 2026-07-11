@@ -321,14 +321,35 @@ async function createService(
   const startedAt = Date.now();
   console.log(`=== [${timestamp()}] Creating service "${name}" for metric "${metric}" ===`);
   const desc = await parseServiceRequest(name, TF_ID, params);
-  const response = await umaFetch(`${AGGREGATOR}${SVC}`, {
+  let response = await umaFetch(`${AGGREGATOR}${SVC}`, {
     method: "POST",
     headers: { "content-type": "text/turtle" },
     body: desc,
   });
 
   console.log(`=== [${timestamp()}] Response status for "${name}": ${response.status} after ${formatDuration(Date.now() - startedAt)} ===`);
-  const responseText = await response.text();
+  let responseText = await response.text();
+
+  if (response.status === 409 && responseText.includes("Service id already registered for user")) {
+    console.log(`=== [${timestamp()}] Service "${name}" already registered; deleting stale registration and retrying ===`);
+    const deleteResponse = await umaFetch(`${AGGREGATOR}/${name}`, { method: "DELETE" });
+    const deleteResponseText = await deleteResponse.text();
+    console.log(`=== [${timestamp()}] Delete status for "${name}": ${deleteResponse.status} ===`);
+
+    if (!deleteResponse.ok && deleteResponse.status !== 404) {
+      throw new Error(
+        `Error deleting stale "${name}": ${deleteResponse.status}, response: ${deleteResponseText}`
+      );
+    }
+
+    response = await umaFetch(`${AGGREGATOR}${SVC}`, {
+      method: "POST",
+      headers: { "content-type": "text/turtle" },
+      body: desc,
+    });
+    console.log(`=== [${timestamp()}] Retry response status for "${name}": ${response.status} after ${formatDuration(Date.now() - startedAt)} ===`);
+    responseText = await response.text();
+  }
 
   if (CREATED_STATUS_CODES.has(response.status)) {
     console.log(`=== [${timestamp()}] Created "${name}" in ${formatDuration(Date.now() - startedAt)} ===`);
