@@ -74,6 +74,10 @@ const EXTRA_KVASIR_PATIENT_SOURCES: KvasirPatientSource[] = [
     server: "https://10.10.218.183",
   },
   {
+    client: "newtest8",
+    server: "https://10.10.221.243",
+  },
+  {
     client: "newtest1",
     server: "https://10.10.220.125",
   },
