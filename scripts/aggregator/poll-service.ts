@@ -46,6 +46,7 @@ const SERVICE_METRICS: Record<string, string> = {
 interface Options {
   user: string;
   password: string;
+  aggregatorServer: string;
   aggregatorId: string;
   svcNames: string[];
   outputNames: string[];
@@ -73,6 +74,10 @@ function parseList(value: string | undefined, fallback: string): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function withoutTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
 }
 
 function servicesForWorkload(workload: string): string[] {
@@ -178,6 +183,11 @@ function sleep(ms: number): Promise<void> {
 
 function readOptions(): Options {
   const user = getArg("--user") ?? process.env.POLL_USER;
+  const aggregatorServer = withoutTrailingSlash(
+    getArg("--aggregator-server")?.trim() ||
+      process.env.POLL_AGGREGATOR_SERVER?.trim() ||
+      config.aggregatorServer
+  );
   const aggregatorId = getArg("--aggregator-id") ?? process.env.POLL_AGGREGATOR_ID;
   const password = getArg("--password") ?? process.env.POLL_PASSWORD ?? "pass";
 
@@ -207,6 +217,7 @@ function readOptions(): Options {
   return {
     user,
     password,
+    aggregatorServer,
     aggregatorId,
     svcNames,
     outputNames,
@@ -331,6 +342,7 @@ async function main() {
 
   console.error("=== Initializing Keycloak Authentication ===");
   console.error(`Poll requestor: ${opts.user}`);
+  console.error(`Aggregator server: ${opts.aggregatorServer}`);
   console.error(`Aggregator id: ${opts.aggregatorId}`);
   const auth = new KeycloakOIDCAuth();
   await auth.init(config.idp, config.realm);
@@ -354,7 +366,7 @@ async function main() {
 
     await Promise.all(opts.svcNames.map((svcName, index) => {
       const outputName = outputForService(opts, index);
-      const serviceEndpoint = `${config.aggregatorServer}/${opts.aggregatorId}/${svcName}`;
+      const serviceEndpoint = `${opts.aggregatorServer}/${opts.aggregatorId}/${svcName}`;
       const outputEndpoint = `${serviceEndpoint}/${outputName}`;
       const endpoint = opts.description ? serviceEndpoint : outputEndpoint;
 

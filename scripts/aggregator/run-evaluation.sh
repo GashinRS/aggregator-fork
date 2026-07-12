@@ -6,6 +6,7 @@ RUN_ID="run-$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR=""
 USER_NAME=""
 PASSWORD="pass"
+AGGREGATOR_SERVER=""
 AGGREGATOR_ID=""
 PATIENTS=""
 SERVICES="wearable-gsr,wearable-bvp,wearable-skt,wearable-ibi"
@@ -24,6 +25,7 @@ Usage:
   ./aggregator/run-evaluation.sh \
     --run-id low-w1-001 \
     --user eval-low4 \
+    --aggregator-server https://aggregator.example.test \
     --aggregator-id c0e83a1e-ff27-43bd-bf56-653497cf8aef \
     --patients eval-low4,eval-low5 \
     --services wearable-gsr,wearable-bvp \
@@ -33,6 +35,7 @@ Usage:
 Optional:
   --run-dir DIR
   --password pass
+  --aggregator-server URL
   --namespace aggregator-platform
   --measurement-log-interval-ms 0
   --stream-idle-timeout-ms 0
@@ -58,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --run-dir) RUN_DIR="$2"; shift 2 ;;
     --user) USER_NAME="$2"; shift 2 ;;
     --password) PASSWORD="$2"; shift 2 ;;
+    --aggregator-server) AGGREGATOR_SERVER="$2"; shift 2 ;;
     --aggregator-id) AGGREGATOR_ID="$2"; shift 2 ;;
     --patients) PATIENTS="$2"; shift 2 ;;
     --services) SERVICES="$2"; shift 2 ;;
@@ -135,6 +139,7 @@ cat > "$RUN_DIR/metadata.json" <<EOF
 {
   "run_id": "$RUN_ID",
   "namespace": "$NAMESPACE",
+  "aggregator_server": "$AGGREGATOR_SERVER",
   "aggregator_id": "$AGGREGATOR_ID",
   "user": "$USER_NAME",
   "patients": "$PATIENTS",
@@ -154,6 +159,7 @@ echo "[$(date -u +%FT%TZ)] Creating services: $SERVICES"
   cd "$SCRIPTS_DIR"
   RUN_ID="$RUN_ID" \
   EVALUATION_RUN_ID="$RUN_ID" \
+  AGGREGATOR_SERVER="$AGGREGATOR_SERVER" \
   AGGREGATOR_ID="$AGGREGATOR_ID" \
   SERVICE_REQUESTOR="$USER_NAME" \
   SERVICE_REQUESTOR_PASSWORD="$PASSWORD" \
@@ -193,15 +199,20 @@ fi
 echo "[$(date -u +%FT%TZ)] Starting poller"
 (
   cd "$SCRIPTS_DIR"
-  npm run poll-service -- \
-    --user "$USER_NAME" \
-    --password "$PASSWORD" \
-    --aggregator-id "$AGGREGATOR_ID" \
-    --svc "$SERVICES" \
-    --interval "$POLL_INTERVAL" \
-    --duration "$DURATION" \
-    --run-id "$RUN_ID" \
+  POLL_ARGS=(
+    --user "$USER_NAME"
+    --password "$PASSWORD"
+    --aggregator-id "$AGGREGATOR_ID"
+    --svc "$SERVICES"
+    --interval "$POLL_INTERVAL"
+    --duration "$DURATION"
+    --run-id "$RUN_ID"
     --out "$RUN_DIR/poll-results.jsonl"
+  )
+  if [[ -n "$AGGREGATOR_SERVER" ]]; then
+    POLL_ARGS+=(--aggregator-server "$AGGREGATOR_SERVER")
+  fi
+  npm run poll-service -- "${POLL_ARGS[@]}"
 ) | tee "$RUN_DIR/poll-service.log"
 
 echo "[$(date -u +%FT%TZ)] Poller finished"
