@@ -198,8 +198,8 @@ const RAW_SERVICES: ServiceDefinition[] = [
 const SAMPLED_SERVICES: ServiceDefinition[] = [
   { service: "wearable-bvp-sampled", metric: "wear:wearable.bvp" },
   { service: "wearable-gsr-sampled", metric: "wear:wearable.gsr" },
-  { service: "wearable-skt", metric: "wear:wearable.skt" },
-  { service: "wearable-ibi", metric: "wear:wearable.ibi" },
+  { service: "wearable-skt-sampled", metric: "wear:wearable.skt" },
+  { service: "wearable-ibi-sampled", metric: "wear:wearable.ibi" },
 ];
 
 const SCHEMA = `
