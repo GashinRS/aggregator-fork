@@ -8,82 +8,14 @@ export const DEFAULT_KVASIR_PATIENT_COUNT = 31;
 const EVAL_LOW_PATIENT_COUNT = 31;
 const EVAL_MEDIUM_PATIENT_COUNT = 31;
 
+// Add a prefix here to create `<prefix>1` through `<prefix>31`, with each
+// client assigned to the Kvasir server whose number matches its suffix.
+const ALL_SERVER_PATIENT_PREFIXES = ["newtest"];
+
 const EXTRA_KVASIR_PATIENT_SOURCES: KvasirPatientSource[] = [
   {
     client: "teststream",
     server: "https://10.10.220.125",
-  },
-  {
-    client: "kronky4",
-    server: "https://10.10.223.11",
-  },
-  {
-    client: "kronky5",
-    server: "https://10.10.216.12",
-  },
-  {
-    client: "kronky6",
-    server: "https://10.10.218.59",
-  },
-  {
-    client: "rorii6",
-    server: "https://10.10.218.59",
-  },
-  {
-    client: "rorii7",
-    server: "https://10.10.218.183",
-  },
-  {
-    client: "alice",
-    server: "https://10.10.218.50",
-  },
-  {
-    client: "kronker1",
-    server: "https://10.10.218.50",
-  },
-  {
-    client: "kronker2",
-    server: "https://10.10.220.123",
-  },
-  {
-    client: "newtest31",
-    server: "https://10.10.217.141",
-  },
-  {
-    client: "newtest1",
-    server: "https://10.10.220.125",
-  },
-  {
-    client: "newtest3",
-    server: "https://10.10.223.39",
-  },
-  {
-    client: "newtest4",
-    server: "https://10.10.223.11",
-  },
-  {
-    client: "newtest5",
-    server: "https://10.10.216.12",
-  },
-  {
-    client: "newtest6",
-    server: "https://10.10.218.59",
-  },
-  {
-    client: "newtest7",
-    server: "https://10.10.218.183",
-  },
-  {
-    client: "newtest8",
-    server: "https://10.10.221.243",
-  },
-  {
-    client: "newtest1",
-    server: "https://10.10.220.125",
-  },
-  {
-    client: "newtest31-2",
-    server: "https://10.10.217.141",
   },
 ];
 
@@ -172,6 +104,14 @@ function numberedPatientSources(count: number): KvasirPatientSource[] {
   });
 }
 
+function allServerPatientSources(): KvasirPatientSource[] {
+  const serverNumbers = Object.keys(KVASIR_SERVER_IPS).map(Number);
+
+  return ALL_SERVER_PATIENT_PREFIXES.flatMap((prefix) =>
+    serverNumbers.map((serverNumber) => sourceFor(`${prefix}${serverNumber}`, serverNumber))
+  );
+}
+
 function evalPatientSources(): KvasirPatientSource[] {
   const low = Array.from({ length: EVAL_LOW_PATIENT_COUNT }, (_, index) =>
     evalSourceFor(`eval-low${index + 1}`, index + 1)
@@ -186,6 +126,7 @@ function evalPatientSources(): KvasirPatientSource[] {
 export function kvasirPatientSources(count = patientCount()): KvasirPatientSource[] {
   return [
     ...numberedPatientSources(count),
+    ...allServerPatientSources(),
     ...evalPatientSources(),
     ...EXTRA_KVASIR_PATIENT_SOURCES,
   ];
