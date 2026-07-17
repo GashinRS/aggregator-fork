@@ -17,7 +17,7 @@ const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || 
 const STREAM_IDLE_TIMEOUT_MS = parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || "120000", 10);
 const STATIC_CATCHUP_ENABLED = process.env.STATIC_CATCHUP_ENABLED !== "0";
 const STATIC_CATCHUP_ON_RECONNECT = process.env.STATIC_CATCHUP_ON_RECONNECT === "1";
-const STATIC_CATCHUP_PAGE_SIZE = parseInt(process.env.STATIC_CATCHUP_PAGE_SIZE || "10000", 10);
+const STATIC_CATCHUP_PAGE_SIZE = parseInt(process.env.STATIC_CATCHUP_PAGE_SIZE || "50000", 10);
 const STATIC_CATCHUP_MAX_PAGES = parseInt(process.env.STATIC_CATCHUP_MAX_PAGES || "5000", 10);
 
 const XSD_DATE_TIME = "http://www.w3.org/2001/XMLSchema#dateTime";
@@ -890,7 +890,7 @@ function buildObservationStaticCatchupQuery(
   plan: ObservationStaticCatchupPlan,
   cursor?: string,
 ): string {
-  const args = [`orderBy: ["id"]`, `pageSize: ${STATIC_CATCHUP_PAGE_SIZE}`];
+  const args = [`pageSize: ${STATIC_CATCHUP_PAGE_SIZE}`];
   if (cursor) {
     args.push(`cursor: ${JSON.stringify(cursor)}`);
   }
