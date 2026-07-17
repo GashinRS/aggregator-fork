@@ -87,7 +87,6 @@ async function main() {
         const result = materializedViewToSparqlJson(view);
         const serializeMs = Math.round((performance.now() - started) * 1000) / 1000;
         const rows = result.results.bindings.length;
-        const responseBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
         console.log(`[HTTP] Returning result with ${view.size} entries`);
         logMeasurement({
           stage: "service_read",
@@ -98,8 +97,7 @@ async function main() {
           view_unique: view.size,
           view_rows: viewRowCount(view),
           result_rows: rows,
-          serialize_ms: serializeMs,
-          response_bytes: responseBytes,
+          serialize_ms: serializeMs
         });
 
         reply.header("Content-Type", "application/sparql-results+json");
