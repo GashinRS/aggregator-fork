@@ -181,6 +181,15 @@ if [[ "${#DEPLOYMENTS[@]}" -eq 0 ]]; then
 fi
 
 for deployment in "${DEPLOYMENTS[@]}"; do
+  GENERATED_ENV_ARGS=(
+    "RUN_ID=$RUN_ID"
+    "EVALUATION_RUN_ID=$RUN_ID"
+    "MEASUREMENT_LOG_INTERVAL_MS=$MEASUREMENT_LOG_INTERVAL_MS"
+  )
+  if [[ -n "$STREAM_IDLE_TIMEOUT_MS" ]]; then GENERATED_ENV_ARGS+=("STREAM_IDLE_TIMEOUT_MS=$STREAM_IDLE_TIMEOUT_MS"); fi
+  if [[ -n "$STREAM_FIRST_DATA_TIMEOUT_MS" ]]; then GENERATED_ENV_ARGS+=("STREAM_FIRST_DATA_TIMEOUT_MS=$STREAM_FIRST_DATA_TIMEOUT_MS"); fi
+  if [[ -n "$STATIC_CATCHUP_INTERVAL_MS" ]]; then GENERATED_ENV_ARGS+=("STATIC_CATCHUP_INTERVAL_MS=$STATIC_CATCHUP_INTERVAL_MS"); fi
+  kubectl -n "$NAMESPACE" set env "deployment/$deployment" "${GENERATED_ENV_ARGS[@]}"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
 done
 
