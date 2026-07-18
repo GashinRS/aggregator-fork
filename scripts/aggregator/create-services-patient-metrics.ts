@@ -26,6 +26,8 @@ const SERVICE_REQUESTOR_PASSWORD = process.env.SERVICE_REQUESTOR_PASSWORD ?? DEF
 const SERVICE_CREATION_WAIT_MS = 0;
 const STALE_SERVICE_DELETE_TIMEOUT_MS = 30_000;
 const STALE_SERVICE_DELETE_POLL_MS = 500;
+const STALE_SERVICE_RECREATE_TIMEOUT_MS = 30_000;
+const STALE_SERVICE_RECREATE_POLL_MS = 1_000;
 const SAMPLED_SERVICE_MINUTE_BUCKET_SIZE = 1;
 
 type ServiceDefinition = {
@@ -150,6 +152,18 @@ async function waitForStaleServiceToDisappear(
     `Timed out waiting for stale service "${name}" to disappear` +
       (lastStatus === undefined ? "" : ` (last status: ${lastStatus})`),
   );
+}
+
+async function serviceIsReachable(
+  umaFetch: ReturnType<KeycloakOIDCAuth["createUMAFetch"]>,
+  name: string,
+): Promise<boolean> {
+  try {
+    const response = await umaFetch(`${AGGREGATOR}/${name}`, { method: "HEAD" });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 // Edit this list to choose which services this script creates.
@@ -383,13 +397,47 @@ async function createService(
 
     await waitForStaleServiceToDisappear(umaFetch, name);
 
-    response = await umaFetch(`${AGGREGATOR}${SVC}`, {
-      method: "POST",
-      headers: { "content-type": "text/turtle" },
-      body: desc,
-    });
-    console.log(`=== [${timestamp()}] Retry response status for "${name}": ${response.status} after ${formatDuration(Date.now() - startedAt)} ===`);
-    responseText = await response.text();
+    // The public registration can return 404 slightly before the server has fully
+    // released the old service's internal/Kubernetes state. Reusing the stable
+    // aggregator ID is intentional, so retry this short cleanup race rather than
+    // requiring a new ID for every evaluation run.
+    const recreateDeadline = Date.now() + STALE_SERVICE_RECREATE_TIMEOUT_MS;
+    let recreateAttempt = 0;
+    await sleep(STALE_SERVICE_RECREATE_POLL_MS);
+
+    while (Date.now() < recreateDeadline) {
+      recreateAttempt += 1;
+      response = await umaFetch(`${AGGREGATOR}${SVC}`, {
+        method: "POST",
+        headers: { "content-type": "text/turtle" },
+        body: desc,
+      });
+      responseText = await response.text();
+      console.log(
+        `=== [${timestamp()}] Recreate attempt ${recreateAttempt} for "${name}": ` +
+          `${response.status} after ${formatDuration(Date.now() - startedAt)} ===`,
+      );
+
+      if (CREATED_STATUS_CODES.has(response.status)) {
+        break;
+      }
+
+      if (response.status !== 409 && response.status !== 500) {
+        break;
+      }
+
+      // Because the old endpoint was observed as absent before the first attempt,
+      // a reachable endpoint here can only be the newly created registration. A
+      // 500 may therefore represent a partial-but-successful creation.
+      await sleep(STALE_SERVICE_RECREATE_POLL_MS);
+      if (await serviceIsReachable(umaFetch, name)) {
+        console.log(
+          `=== [${timestamp()}] Service "${name}" became reachable after recreate ` +
+            `returned ${response.status}; accepting the new registration ===`,
+        );
+        return;
+      }
+    }
   }
 
   if (CREATED_STATUS_CODES.has(response.status)) {
