@@ -24,6 +24,8 @@ const SERVICE_REQUESTOR = process.env.SERVICE_REQUESTOR ?? "patient1";
 const SERVICE_REQUESTOR_PASSWORD = process.env.SERVICE_REQUESTOR_PASSWORD ?? DEFAULT_PATIENT_PASSWORD;
 // const SERVICE_CREATION_WAIT_MS = 30_000;
 const SERVICE_CREATION_WAIT_MS = 0;
+const STALE_SERVICE_DELETE_TIMEOUT_MS = 30_000;
+const STALE_SERVICE_DELETE_POLL_MS = 500;
 const SAMPLED_SERVICE_MINUTE_BUCKET_SIZE = 1;
 
 type ServiceDefinition = {
@@ -113,6 +115,41 @@ function timestamp(): string {
 
 function formatDuration(ms: number): string {
   return `${Math.round(ms / 100) / 10}s`;
+}
+
+async function waitForStaleServiceToDisappear(
+  umaFetch: ReturnType<KeycloakOIDCAuth["createUMAFetch"]>,
+  name: string,
+): Promise<void> {
+  const serviceEndpoint = `${AGGREGATOR}/${name}`;
+  const deadline = Date.now() + STALE_SERVICE_DELETE_TIMEOUT_MS;
+  let lastStatus: number | undefined;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await umaFetch(serviceEndpoint, { method: "HEAD" });
+      lastStatus = response.status;
+      if (!response.ok) {
+        console.log(
+          `=== [${timestamp()}] Stale service "${name}" is gone (${response.status}); recreating ===`,
+        );
+        return;
+      }
+    } catch (error) {
+      // A transient transport error is not proof that the registration disappeared.
+      console.error(
+        `=== [${timestamp()}] Waiting for stale service "${name}" to disappear: HEAD failed ===`,
+      );
+      console.error(error);
+    }
+
+    await sleep(STALE_SERVICE_DELETE_POLL_MS);
+  }
+
+  throw new Error(
+    `Timed out waiting for stale service "${name}" to disappear` +
+      (lastStatus === undefined ? "" : ` (last status: ${lastStatus})`),
+  );
 }
 
 // Edit this list to choose which services this script creates.
@@ -344,6 +381,8 @@ async function createService(
       );
     }
 
+    await waitForStaleServiceToDisappear(umaFetch, name);
+
     response = await umaFetch(`${AGGREGATOR}${SVC}`, {
       method: "POST",
       headers: { "content-type": "text/turtle" },
@@ -351,29 +390,6 @@ async function createService(
     });
     console.log(`=== [${timestamp()}] Retry response status for "${name}": ${response.status} after ${formatDuration(Date.now() - startedAt)} ===`);
     responseText = await response.text();
-  }
-
-  if (response.status === 500 && responseText.includes("Failed to create service from request")) {
-    const serviceEndpoint = `${AGGREGATOR}/${name}`;
-    console.log(`=== [${timestamp()}] Create returned 500; checking whether "${name}" is registered at ${serviceEndpoint} ===`);
-
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      try {
-        const checkResponse = await umaFetch(serviceEndpoint, { method: "HEAD" });
-        console.log(`=== [${timestamp()}] Registration check ${attempt}/5 for "${name}": ${checkResponse.status} ===`);
-        if (checkResponse.ok) {
-          console.log(`=== [${timestamp()}] Treating "${name}" as created because the service endpoint is reachable ===`);
-          return;
-        }
-      } catch (error) {
-        console.error(`=== [${timestamp()}] Registration check ${attempt}/5 for "${name}" failed ===`);
-        console.error(error);
-      }
-
-      if (attempt < 5) {
-        await sleep(1000);
-      }
-    }
   }
 
   if (CREATED_STATUS_CODES.has(response.status)) {

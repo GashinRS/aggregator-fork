@@ -18,6 +18,7 @@ STREAM_FIRST_DATA_TIMEOUT_MS=""
 STATIC_CATCHUP_INTERVAL_MS=""
 CLEANUP_AFTER="false"
 UPLOAD_CMD=""
+GENERATED_SELECTOR=""
 
 usage() {
   cat <<'EOF'
@@ -116,12 +117,68 @@ stop_background_jobs() {
 }
 
 cleanup_generated_services() {
+  local deadline
   kubectl -n "$NAMESPACE" delete deployment,service \
-    -l "app.kubernetes.io/name=aggregator-service,agg.knows.idlab.ugent.be/managed-by=$AGGREGATOR_ID" \
+    -l "$GENERATED_SELECTOR" \
     --ignore-not-found --wait=true
+
+  # Deployment deletion returns before all dependent pods have necessarily vanished.
+  # Recreating the same service name while those pods still match its selector makes
+  # `kubectl logs deployment/...` choose an arbitrary old revision.
+  deadline=$((SECONDS + 180))
+  while kubectl -n "$NAMESPACE" get pods -l "$GENERATED_SELECTOR" -o name \
+      | grep -q .; do
+    if (( SECONDS >= deadline )); then
+      echo "Timed out waiting for stale generated-service pods to terminate" >&2
+      kubectl -n "$NAMESPACE" get pods -l "$GENERATED_SELECTOR" -o wide >&2 || true
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+select_current_run_pod() {
+  local deployment="$1"
+  local selector candidate candidate_run_ids index
+  local -a candidates=()
+
+  selector="$(
+    kubectl -n "$NAMESPACE" get "deployment/$deployment" \
+      -o go-template='{{range $key, $value := .spec.selector.matchLabels}}{{printf "%s=%s," $key $value}}{{end}}'
+  )"
+  selector="${selector%,}"
+  if [[ -z "$selector" ]]; then
+    echo "Deployment $deployment has no pod selector" >&2
+    return 1
+  fi
+
+  mapfile -t candidates < <(
+    kubectl -n "$NAMESPACE" get pods -l "$selector" \
+      --field-selector=status.phase=Running \
+      --sort-by=.metadata.creationTimestamp -o name
+  )
+
+  for ((index=${#candidates[@]} - 1; index >= 0; index--)); do
+    candidate="${candidates[$index]}"
+    candidate_run_ids="$(
+      kubectl -n "$NAMESPACE" get "$candidate" \
+        -o jsonpath='{range .spec.containers[*].env[?(@.name=="RUN_ID")]}{.value}{"\n"}{end}'
+    )"
+    if grep -Fxq "$RUN_ID" <<<"$candidate_run_ids"; then
+      kubectl -n "$NAMESPACE" wait --for=condition=Ready "$candidate" --timeout=180s >/dev/null
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "No Ready pod for deployment $deployment carries RUN_ID=$RUN_ID" >&2
+  kubectl -n "$NAMESPACE" get pods -l "$selector" -o wide >&2 || true
+  return 1
 }
 
 trap stop_background_jobs EXIT
+
+GENERATED_SELECTOR="app.kubernetes.io/name=aggregator-service,agg.knows.idlab.ugent.be/managed-by=$AGGREGATOR_ID"
 
 echo "[$(date -u +%FT%TZ)] Run directory: $RUN_DIR"
 echo "[$(date -u +%FT%TZ)] Cleaning generated services for aggregator $AGGREGATOR_ID"
@@ -195,7 +252,9 @@ done
 
 echo "[$(date -u +%FT%TZ)] Starting log capture"
 for deployment in "${DEPLOYMENTS[@]}"; do
-  kubectl -n "$NAMESPACE" logs -f "deployment/$deployment" --all-containers --prefix > "$LOG_DIR/$deployment.log" 2>&1 &
+  pod="$(select_current_run_pod "$deployment")"
+  echo "[$(date -u +%FT%TZ)] Capturing $deployment logs from $pod (run_id=$RUN_ID)"
+  kubectl -n "$NAMESPACE" logs -f "$pod" --all-containers --prefix > "$LOG_DIR/$deployment.log" 2>&1 &
   LOG_PIDS+=("$!")
 done
 
