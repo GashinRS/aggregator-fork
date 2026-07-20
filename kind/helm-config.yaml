@@ -1,17 +1,12 @@
 external:
-  host: aggregator.local
-  httpPort: 5080
-  httpsPort: 5443
-
-#external:
-#  host: aggregator.10.10.220.153.sslip.io
-#  httpPort: 80
-#  httpsPort: 443
+  host: aggregator.10.10.220.153.sslip.io
+  httpPort: 80
+  httpsPort: 443
 
 auth:
   oidc:
     clientId: aggregator-server
-    server: http://localhost:8280/realms/kvasir
+    server: https://10.10.220.153/auth/realms/kvasir
     clientSecret: aggregator-secret
   allowedRegistrationTypes:
     - device_code
