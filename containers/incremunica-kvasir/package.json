@@ -24,6 +24,6 @@
     "undici": "^7.16.0"
   },
   "overrides": {
-    "@comunica-graphql/sparql2graphql-converter": "github:GashinRS/sparql2graphql-converter-fork#main"
+    "@comunica-graphql/sparql2graphql-converter": "github:GashinRS/sparql2graphql-converter-fork#80ecbec9630ff43fc813a9cb35aa51cfbf97fbd7"
   }
 }
