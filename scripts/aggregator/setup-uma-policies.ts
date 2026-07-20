@@ -17,19 +17,25 @@ type UserCredentials = {
 const umaIdCache = new Map<UserKey, string>();
 const KVASIR_CLIENT_SOURCES = kvasirPatientSources();
 const numberedPatients = Array.from({ length: 30 }, (_, index) => `patient${index + 1}`);
-const evalLowPatients = Array.from({ length: 15 }, (_, index) => `eval-low${index + 1}`);
+const evalLowPatients = Array.from({ length: 30 }, (_, index) => `eval-low${index + 1}`);
 const evalMediumPatients = Array.from({ length: 15 }, (_, index) => `eval-medium${index + 1}`);
 
 // Map each aggregator owner to the patients whose slice data they need to query.
 // Add another owner here if needed; the patient list itself is generated.
 const AGGREGATOR_OWNER_PATIENTS: Record<UserKey, UserKey[]> = {
-  patient1: ['patient1,patient3,patient4,patient5,patient6,patient7,patient8,patient9,patient10,patient11,patient12,patient13,patient14'],
+  //patient1: ['patient1,patient3,patient4,patient5,patient6,patient7,patient8,patient9,patient10,patient11,patient12,patient13,patient14,patient15,patient16,patient17,patient18,patient19,patient20,patient21,patient22,patient23,patient24,patient25,patient26,patient27,patient28,patient29,patient30,patient31'],
   //patient15: numberedPatients,
   //"eval-low1": evalLowPatients,
   //"eval-low1": ['eval-low8,eval-low9,eval-low10,eval-low11'],
-  //"eval-medium1": evalMediumPatients,
+  //"eval-low12": ['eval-low12,eval-low13']
+  // "eval-medium1": evalMediumPatients,
   //"teststream": ['teststream,teststream5'],
-  //"teststream": ['teststream,teststream5'],
+  // "rorii6": ['rorii6,rorii7'],
+  // "patient1": ['patient1']
+  // "kronky4": ['kronky4,kronky5,kronky6']
+  // "eval-low2": ['eval-low2']
+  "newtest17": ['newtest17']
+  // "eval-medium13": ['eval-medium13'],
 };
 
 function withoutTrailingSlash(value: string): string {

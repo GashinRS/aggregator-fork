@@ -4,6 +4,7 @@ import (
 	"aggregator/model"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -81,7 +82,7 @@ func createDeployment(
 		Name:            service.InstanceID,
 		Image:           image,
 		ImagePullPolicy: corev1.PullNever,
-		Env:             append(trustCAEnvVars(), envVars...),
+		Env:             append(append(trustCAEnvVars(), inheritedEvaluationEnvVars()...), envVars...),
 		VolumeMounts:    trustCAVolumeMounts(),
 		Ports: []corev1.ContainerPort{
 			{ContainerPort: 8080},
@@ -133,6 +134,24 @@ func createDeployment(
 
 	logrus.Infof("Deployment %s created successfully", service.NamespaceID)
 	return nil
+}
+
+func inheritedEvaluationEnvVars() []corev1.EnvVar {
+	names := []string{
+		"RUN_ID",
+		"EVALUATION_RUN_ID",
+		"MEASUREMENT_LOG_INTERVAL_MS",
+		"STATIC_CATCHUP_PAGE_SIZE",
+	}
+
+	envVars := make([]corev1.EnvVar, 0, len(names))
+	for _, name := range names {
+		if value, ok := os.LookupEnv(name); ok {
+			envVars = append(envVars, corev1.EnvVar{Name: name, Value: value})
+		}
+	}
+
+	return envVars
 }
 
 func createService(service *model.Service, ports []int32, ctx context.Context) error {

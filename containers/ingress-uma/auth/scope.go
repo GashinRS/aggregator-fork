@@ -44,7 +44,7 @@ func determineScopes(method string) ([]Scope, error) {
 	case "POST":
 		logrus.WithFields(logrus.Fields{"method": method}).Debug("🔧 Requesting 'create' permissions")
 		return []Scope{Create}, nil
-	case "PUT", "PATCH":
+	case "PUT":
 		logrus.WithFields(logrus.Fields{"method": method}).Debug("🔧 Requesting 'write' permissions")
 		return []Scope{Write}, nil
 	case "DELETE":

@@ -13,9 +13,6 @@ SERVICES="wearable-gsr,wearable-bvp,wearable-skt,wearable-ibi"
 POLL_INTERVAL="60s"
 DURATION="20m"
 MEASUREMENT_LOG_INTERVAL_MS="0"
-STREAM_IDLE_TIMEOUT_MS=""
-STREAM_FIRST_DATA_TIMEOUT_MS=""
-STATIC_CATCHUP_INTERVAL_MS=""
 CLEANUP_AFTER="false"
 UPLOAD_CMD=""
 GENERATED_SELECTOR=""
@@ -39,9 +36,6 @@ Optional:
   --aggregator-server URL
   --namespace aggregator-platform
   --measurement-log-interval-ms 0
-  --stream-idle-timeout-ms 0
-  --stream-first-data-timeout-ms 0
-  --static-catchup-interval-ms 0
   --upload-cmd "bash /path/to/uploader.sh"
   --cleanup-after
 
@@ -70,9 +64,6 @@ while [[ $# -gt 0 ]]; do
     --poll-interval) POLL_INTERVAL="$2"; shift 2 ;;
     --namespace) NAMESPACE="$2"; shift 2 ;;
     --measurement-log-interval-ms) MEASUREMENT_LOG_INTERVAL_MS="$2"; shift 2 ;;
-    --stream-idle-timeout-ms) STREAM_IDLE_TIMEOUT_MS="$2"; shift 2 ;;
-    --stream-first-data-timeout-ms) STREAM_FIRST_DATA_TIMEOUT_MS="$2"; shift 2 ;;
-    --static-catchup-interval-ms) STATIC_CATCHUP_INTERVAL_MS="$2"; shift 2 ;;
     --upload-cmd) UPLOAD_CMD="$2"; shift 2 ;;
     --cleanup-after) CLEANUP_AFTER="true"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -186,9 +177,6 @@ cleanup_generated_services
 
 echo "[$(date -u +%FT%TZ)] Setting aggregator-server evaluation env"
 ENV_ARGS=("RUN_ID=$RUN_ID" "EVALUATION_RUN_ID=$RUN_ID" "MEASUREMENT_LOG_INTERVAL_MS=$MEASUREMENT_LOG_INTERVAL_MS")
-if [[ -n "$STREAM_IDLE_TIMEOUT_MS" ]]; then ENV_ARGS+=("STREAM_IDLE_TIMEOUT_MS=$STREAM_IDLE_TIMEOUT_MS"); fi
-if [[ -n "$STREAM_FIRST_DATA_TIMEOUT_MS" ]]; then ENV_ARGS+=("STREAM_FIRST_DATA_TIMEOUT_MS=$STREAM_FIRST_DATA_TIMEOUT_MS"); fi
-if [[ -n "$STATIC_CATCHUP_INTERVAL_MS" ]]; then ENV_ARGS+=("STATIC_CATCHUP_INTERVAL_MS=$STATIC_CATCHUP_INTERVAL_MS"); fi
 kubectl -n "$NAMESPACE" set env deployment/aggregator-server "${ENV_ARGS[@]}"
 kubectl -n "$NAMESPACE" rollout status deployment/aggregator-server --timeout=180s
 
@@ -204,9 +192,6 @@ cat > "$RUN_DIR/metadata.json" <<EOF
   "duration": "$DURATION",
   "poll_interval": "$POLL_INTERVAL",
   "measurement_log_interval_ms": "$MEASUREMENT_LOG_INTERVAL_MS",
-  "stream_idle_timeout_ms": "$STREAM_IDLE_TIMEOUT_MS",
-  "stream_first_data_timeout_ms": "$STREAM_FIRST_DATA_TIMEOUT_MS",
-  "static_catchup_interval_ms": "$STATIC_CATCHUP_INTERVAL_MS",
   "started_at": "$(date -u +%FT%TZ)"
 }
 EOF
@@ -243,9 +228,6 @@ for deployment in "${DEPLOYMENTS[@]}"; do
     "EVALUATION_RUN_ID=$RUN_ID"
     "MEASUREMENT_LOG_INTERVAL_MS=$MEASUREMENT_LOG_INTERVAL_MS"
   )
-  if [[ -n "$STREAM_IDLE_TIMEOUT_MS" ]]; then GENERATED_ENV_ARGS+=("STREAM_IDLE_TIMEOUT_MS=$STREAM_IDLE_TIMEOUT_MS"); fi
-  if [[ -n "$STREAM_FIRST_DATA_TIMEOUT_MS" ]]; then GENERATED_ENV_ARGS+=("STREAM_FIRST_DATA_TIMEOUT_MS=$STREAM_FIRST_DATA_TIMEOUT_MS"); fi
-  if [[ -n "$STATIC_CATCHUP_INTERVAL_MS" ]]; then GENERATED_ENV_ARGS+=("STATIC_CATCHUP_INTERVAL_MS=$STATIC_CATCHUP_INTERVAL_MS"); fi
   kubectl -n "$NAMESPACE" set env "deployment/$deployment" "${GENERATED_ENV_ARGS[@]}"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
 done

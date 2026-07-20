@@ -12,11 +12,8 @@ const MEASUREMENT_LOG_INTERVAL_MS = parseInt(process.env.MEASUREMENT_LOG_INTERVA
 const STREAM_RECONNECT_INITIAL_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_INITIAL_DELAY_MS || "1000", 10);
 const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_DELAY_MS || "30000", 10);
 const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_BACKOFF_FACTOR || "2");
-const STREAM_FIRST_DATA_TIMEOUT_MS = parseInt(process.env.STREAM_FIRST_DATA_TIMEOUT_MS || "300000", 10);
 const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || "30000", 10);
-const STREAM_IDLE_TIMEOUT_MS = parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || "120000", 10);
 const STATIC_CATCHUP_ENABLED = process.env.STATIC_CATCHUP_ENABLED !== "0";
-const STATIC_CATCHUP_ON_RECONNECT = process.env.STATIC_CATCHUP_ON_RECONNECT === "1";
 const STATIC_CATCHUP_PAGE_SIZE = parseInt(process.env.STATIC_CATCHUP_PAGE_SIZE || "50000", 10);
 const STATIC_CATCHUP_MAX_PAGES = parseInt(process.env.STATIC_CATCHUP_MAX_PAGES || "5000", 10);
 
@@ -496,6 +493,30 @@ export async function querySources(
     }
   };
 
+  const retryDelay = (attempt: number) => Math.min(
+    STREAM_RECONNECT_INITIAL_DELAY_MS * Math.pow(STREAM_RECONNECT_BACKOFF_FACTOR, attempt - 1),
+    STREAM_RECONNECT_MAX_DELAY_MS,
+  );
+
+  const runInitialStaticCatchup = async (source: typeof sources[number]) => {
+    let attempt = 0;
+    while (!await runStaticCatchup(source, attempt)) {
+      attempt++;
+      const delay = retryDelay(attempt);
+      console.warn(`[STATIC] Retrying initial catch-up for ${source.value} in ${delay}ms (attempt ${attempt})`);
+      logMeasurement({
+        stage: "t6",
+        event: "static_catchup_retry_scheduled",
+        pod: source.value,
+        observations: counters.observationsBySource.get(source.value) ?? 0,
+        source: source.value,
+        reconnect_attempt: attempt,
+        retry_delay_ms: delay,
+      });
+      await sleep(delay);
+    }
+  };
+
   const handleBinding = async (b: any, source?: string, replay?: ReplayState) => {
     const { key, stable } = materializedBindingKey(b, source);
     const addition = isAddition(b);
@@ -654,21 +675,6 @@ export async function querySources(
     });
 
     let reconnectScheduled = false;
-    let firstDataReceived = false;
-    let firstDataTimeout: ReturnType<typeof setTimeout> | undefined;
-    let idleTimeout: ReturnType<typeof setTimeout> | undefined;
-
-    const clearFirstDataTimeout = () => {
-      if (!firstDataTimeout) return;
-      clearTimeout(firstDataTimeout);
-      firstDataTimeout = undefined;
-    };
-
-    const clearIdleTimeout = () => {
-      if (!idleTimeout) return;
-      clearTimeout(idleTimeout);
-      idleTimeout = undefined;
-    };
 
     const clearReplaySettleTimer = () => {
       if (!replay?.settleTimer) return;
@@ -685,28 +691,9 @@ export async function querySources(
       }, STREAM_REPLAY_SETTLE_MS);
     };
 
-    const destroyStream = (message: string) => {
-      const destroy = (bindingsStream as { destroy?: (error?: Error) => void }).destroy;
-      if (typeof destroy === "function") {
-        destroy.call(bindingsStream, new Error(message));
-      }
-    };
-
-    const scheduleIdleTimeout = () => {
-      if (STREAM_IDLE_TIMEOUT_MS <= 0) return;
-      clearIdleTimeout();
-      idleTimeout = setTimeout(() => {
-        idleTimeout = undefined;
-        destroyStream(`Stream idle timeout after ${STREAM_IDLE_TIMEOUT_MS}ms`);
-        closeAndReconnect("idle", undefined, STREAM_IDLE_TIMEOUT_MS);
-      }, STREAM_IDLE_TIMEOUT_MS);
-    };
-
-    const closeAndReconnect = (reason: "end" | "error" | "idle", err?: unknown, idleTimeoutMs = STREAM_FIRST_DATA_TIMEOUT_MS) => {
+    const closeAndReconnect = (reason: "end" | "error", err?: unknown) => {
       if (reconnectScheduled) return;
       reconnectScheduled = true;
-      clearFirstDataTimeout();
-      clearIdleTimeout();
       clearReplaySettleTimer();
       if (replay) {
         replay.closed = true;
@@ -721,17 +708,6 @@ export async function querySources(
           observations: counters.observationsBySource.get(source.value) ?? 0,
           source: source.value,
           error: err instanceof Error ? err.message : String(err),
-        });
-      } else if (reason === "idle") {
-        console.warn(`[STREAM] No data received for ${source.value} within ${idleTimeoutMs}ms, reconnecting`);
-        logMeasurement({
-          stage: "t6",
-          event: "stream_idle_timeout",
-          pod: source.value,
-          observations: counters.observationsBySource.get(source.value) ?? 0,
-          source: source.value,
-          reconnect_attempt: reconnectAttempt,
-          idle_timeout_ms: idleTimeoutMs,
         });
       } else {
         console.log(`[STREAM] Query stream ended for source: ${source.value}`);
@@ -752,11 +728,6 @@ export async function querySources(
     };
 
     bindingsStream.on('data', (binding) => {
-      if (!firstDataReceived) {
-        firstDataReceived = true;
-        clearFirstDataTimeout();
-      }
-      scheduleIdleTimeout();
       void handleBinding(binding, source.value, replay).then(() => {
         scheduleReplaySettle();
       });
@@ -769,20 +740,10 @@ export async function querySources(
     bindingsStream.on('error', (err) => {
       closeAndReconnect("error", err);
     });
-
-    if (STREAM_FIRST_DATA_TIMEOUT_MS > 0) {
-      firstDataTimeout = setTimeout(() => {
-        destroyStream(`Stream first data timeout after ${STREAM_FIRST_DATA_TIMEOUT_MS}ms`);
-        closeAndReconnect("idle");
-      }, STREAM_FIRST_DATA_TIMEOUT_MS);
-    }
   };
 
   const scheduleReconnect = (source: typeof sources[number], reconnectAttempt: number) => {
-    const delay = Math.min(
-      STREAM_RECONNECT_INITIAL_DELAY_MS * Math.pow(STREAM_RECONNECT_BACKOFF_FACTOR, reconnectAttempt - 1),
-      STREAM_RECONNECT_MAX_DELAY_MS,
-    );
+    const delay = retryDelay(reconnectAttempt);
 
     console.warn(`[STREAM] Reconnecting source ${source.value} in ${delay}ms (attempt ${reconnectAttempt})`);
     logMeasurement({
@@ -796,17 +757,12 @@ export async function querySources(
     });
 
     setTimeout(() => {
-      void (async () => {
-        if (STATIC_CATCHUP_ON_RECONNECT) {
-          await runStaticCatchup(source, reconnectAttempt);
-        }
-        await startSource(source, reconnectAttempt);
-      })();
+      void startSource(source, reconnectAttempt);
     }, delay);
   };
 
   if (staticCatchupPlan) {
-    await Promise.all(sources.map(source => runStaticCatchup(source, 0)));
+    await Promise.all(sources.map(runInitialStaticCatchup));
   }
 
   await Promise.all(sources.map(source => startSource(source)));

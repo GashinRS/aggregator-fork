@@ -11,6 +11,7 @@ const EVAL_MEDIUM_PATIENT_COUNT = 31;
 // Add a prefix here to create `<prefix>1` through `<prefix>31`, with each
 // client assigned to the Kvasir server whose number matches its suffix.
 const ALL_SERVER_PATIENT_PREFIXES = ["newtest"];
+const ALL_SERVER_PATIENT_SUFFIXES = ["low", "med", "high"];
 
 const EXTRA_KVASIR_PATIENT_SOURCES: KvasirPatientSource[] = [
   {
@@ -22,11 +23,11 @@ const EXTRA_KVASIR_PATIENT_SOURCES: KvasirPatientSource[] = [
 const KVASIR_SERVER_IPS: Record<number, string> = {
   1: "10.10.220.125",
   2: "10.10.220.123",
-  3: "10.10.223.39",
-  4: "10.10.223.11",
-  5: "10.10.216.12",
-  6: "10.10.218.59",
-  7: "10.10.218.183",
+  3: "10.10.217.180",
+  4: "10.10.222.15",
+  5: "10.10.223.128",
+  6: "10.10.223.58",
+  7: "10.10.221.83",
   8: "10.10.221.243",
   9: "10.10.222.26",
   10: "10.10.222.77",
@@ -50,12 +51,17 @@ const KVASIR_SERVER_IPS: Record<number, string> = {
   28: "10.10.217.149",
   29: "10.10.221.6",
   30: "10.10.221.120",
-  31: "10.10.217.141",
+  31: "10.10.218.66",
 };
 
 function parsePatientNumber(patient: string): number | undefined {
-  const match = /^patient(\d+)$/.exec(patient);
-  return match ? Number(match[1]) : undefined;
+  const numberedPatient = /^patient(\d+)$/.exec(patient);
+  if (numberedPatient) {
+    return Number(numberedPatient[1]);
+  }
+
+  const evaluationPatient = /^p(\d+)(?:low|med)$/.exec(patient);
+  return evaluationPatient ? Number(evaluationPatient[1]) : undefined;
 }
 
 function patientCount(): number {
@@ -107,9 +113,16 @@ function numberedPatientSources(count: number): KvasirPatientSource[] {
 function allServerPatientSources(): KvasirPatientSource[] {
   const serverNumbers = Object.keys(KVASIR_SERVER_IPS).map(Number);
 
-  return ALL_SERVER_PATIENT_PREFIXES.flatMap((prefix) =>
+  const prefixedSources = ALL_SERVER_PATIENT_PREFIXES.flatMap((prefix) =>
     serverNumbers.map((serverNumber) => sourceFor(`${prefix}${serverNumber}`, serverNumber))
   );
+  const suffixedSources = serverNumbers.flatMap((serverNumber) =>
+    ALL_SERVER_PATIENT_SUFFIXES.map((suffix) =>
+      sourceFor(`p${serverNumber}${suffix}`, serverNumber)
+    )
+  );
+
+  return [...prefixedSources, ...suffixedSources];
 }
 
 function evalPatientSources(): KvasirPatientSource[] {

@@ -18,8 +18,8 @@
     "convert-sparql": "tsc && node dist/aggregator/convert-sparql.js",
     "get-service": "tsc && node dist/aggregator/get-service.js",
     "poll-service": "tsc && node dist/aggregator/poll-service.js",
+    "direct-subscription": "tsc && node dist/aggregator/direct-subscription.js",
     "get-config": "tsc && node dist/aggregator/get-config.js",
-    "update-service-sources": "tsc && node dist/aggregator/update-service-sources.js",
     "get-credentials": "tsc && node dist/kvasir/get-credentials.js",
     "pacsoi-setup": "tsc && node dist/kvasir/pacsoi-setup.js",
     "query-pod": "tsc && node dist/kvasir/query-pod.js"
