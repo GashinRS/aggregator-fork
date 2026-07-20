@@ -255,7 +255,7 @@ const SAMPLED_SERVICES: ServiceDefinition[] = [
 
 const SCHEMA = `
 type Query {
-  saref_Observation: [saref_Observation]!
+  saref_Observation(pageSize: Int, cursor: String): [saref_Observation]!
 }
 
 type saref_Observation @class(iri: "saref:Observation") {
