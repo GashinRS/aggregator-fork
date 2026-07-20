@@ -141,6 +141,8 @@ func inheritedEvaluationEnvVars() []corev1.EnvVar {
 		"RUN_ID",
 		"EVALUATION_RUN_ID",
 		"MEASUREMENT_LOG_INTERVAL_MS",
+		"INITIAL_QUERY_PAGE_SIZE",
+		"STATIC_CATCHUP_ENABLED",
 		"STATIC_CATCHUP_PAGE_SIZE",
 	}
 
