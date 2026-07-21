@@ -10,6 +10,7 @@ RUN apk add --no-cache git
 
 # Install deps
 COPY package*.json ./
+COPY patches ./patches
 RUN npm install
 
 # Copy source
@@ -31,6 +32,7 @@ RUN apk add --no-cache git
 
 # Only install production deps
 COPY package*.json ./
+COPY patches ./patches
 RUN npm install --omit=dev
 
 # Copy built files
