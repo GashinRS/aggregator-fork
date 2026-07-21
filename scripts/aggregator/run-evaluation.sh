@@ -12,7 +12,7 @@ PATIENTS=""
 SERVICES="wearable-gsr,wearable-bvp,wearable-skt,wearable-ibi"
 POLL_INTERVAL="60s"
 DURATION="20m"
-MEASUREMENT_LOG_INTERVAL_MS="0"
+MEASUREMENT_LOG_INTERVAL_MS="5000"
 CLEANUP_AFTER="false"
 UPLOAD_CMD=""
 GENERATED_SELECTOR=""
@@ -35,7 +35,7 @@ Optional:
   --password pass
   --aggregator-server URL
   --namespace aggregator-platform
-  --measurement-log-interval-ms 0
+  --measurement-log-interval-ms 5000  # default; 0 logs every view update
   --upload-cmd "bash /path/to/uploader.sh"
   --cleanup-after
 
@@ -78,6 +78,11 @@ fi
 
 if [[ -z "$AGGREGATOR_ID" ]]; then
   echo "Missing --aggregator-id" >&2
+  exit 1
+fi
+
+if [[ ! "$MEASUREMENT_LOG_INTERVAL_MS" =~ ^[0-9]+$ ]]; then
+  echo "--measurement-log-interval-ms must be an integer >= 0" >&2
   exit 1
 fi
 
