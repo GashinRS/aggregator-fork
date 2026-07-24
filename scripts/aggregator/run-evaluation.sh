@@ -13,6 +13,8 @@ SERVICES="wearable-gsr,wearable-bvp,wearable-skt,wearable-ibi"
 POLL_INTERVAL="60s"
 DURATION="20m"
 MEASUREMENT_LOG_INTERVAL_MS="5000"
+RESULT_MODE="snapshot-and-stream"
+RESULT_PAGE_SIZE="100000"
 CLEANUP_AFTER="false"
 UPLOAD_CMD=""
 GENERATED_SELECTOR=""
@@ -36,6 +38,8 @@ Optional:
   --aggregator-server URL
   --namespace aggregator-platform
   --measurement-log-interval-ms 5000  # default; 0 logs every view update
+  --result-mode snapshot-and-stream   # or poll for the legacy full-page poller
+  --result-page-size 25000
   --upload-cmd "bash /path/to/uploader.sh"
   --cleanup-after
 
@@ -64,6 +68,8 @@ while [[ $# -gt 0 ]]; do
     --poll-interval) POLL_INTERVAL="$2"; shift 2 ;;
     --namespace) NAMESPACE="$2"; shift 2 ;;
     --measurement-log-interval-ms) MEASUREMENT_LOG_INTERVAL_MS="$2"; shift 2 ;;
+    --result-mode) RESULT_MODE="$2"; shift 2 ;;
+    --result-page-size) RESULT_PAGE_SIZE="$2"; shift 2 ;;
     --upload-cmd) UPLOAD_CMD="$2"; shift 2 ;;
     --cleanup-after) CLEANUP_AFTER="true"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -85,6 +91,15 @@ if [[ ! "$MEASUREMENT_LOG_INTERVAL_MS" =~ ^[0-9]+$ ]]; then
   echo "--measurement-log-interval-ms must be an integer >= 0" >&2
   exit 1
 fi
+if [[ "$RESULT_MODE" != "snapshot-and-stream" && "$RESULT_MODE" != "poll" ]]; then
+  echo "--result-mode must be snapshot-and-stream or poll" >&2
+  exit 1
+fi
+if [[ ! "$RESULT_PAGE_SIZE" =~ ^[0-9]+$ ]] ||
+   (( RESULT_PAGE_SIZE < 1 || RESULT_PAGE_SIZE > 50000 )); then
+  echo "--result-page-size must be an integer between 1 and 50000" >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -96,6 +111,8 @@ fi
 
 LOG_DIR="$RUN_DIR/logs"
 mkdir -p "$LOG_DIR"
+RESULT_READY_FILE="$RUN_DIR/result-ready"
+rm -f "$RESULT_READY_FILE"
 
 LOG_PIDS=()
 UPLOAD_PID=""
@@ -196,6 +213,8 @@ cat > "$RUN_DIR/metadata.json" <<EOF
   "services": "$SERVICES",
   "duration": "$DURATION",
   "poll_interval": "$POLL_INTERVAL",
+  "result_mode": "$RESULT_MODE",
+  "result_page_size": $RESULT_PAGE_SIZE,
   "measurement_log_interval_ms": "$MEASUREMENT_LOG_INTERVAL_MS",
   "started_at": "$(date -u +%FT%TZ)"
 }
@@ -232,6 +251,7 @@ for deployment in "${DEPLOYMENTS[@]}"; do
     "RUN_ID=$RUN_ID"
     "EVALUATION_RUN_ID=$RUN_ID"
     "MEASUREMENT_LOG_INTERVAL_MS=$MEASUREMENT_LOG_INTERVAL_MS"
+    "RESULT_PAGE_SIZE=$RESULT_PAGE_SIZE"
   )
   kubectl -n "$NAMESPACE" set env "deployment/$deployment" "${GENERATED_ENV_ARGS[@]}"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
@@ -261,8 +281,11 @@ echo "[$(date -u +%FT%TZ)] Starting poller"
     --svc "$SERVICES"
     --interval "$POLL_INTERVAL"
     --duration "$DURATION"
+    --result-mode "$RESULT_MODE"
+    --result-page-size "$RESULT_PAGE_SIZE"
     --run-id "$RUN_ID"
     --out "$RUN_DIR/poll-results.jsonl"
+    --ready-file "$RESULT_READY_FILE"
   )
   if [[ -n "$AGGREGATOR_SERVER" ]]; then
     POLL_ARGS+=(--aggregator-server "$AGGREGATOR_SERVER")

@@ -8,7 +8,7 @@
     "postinstall": "node patches/apply-incremunica-sse-fix.mjs",
     "patch:incremunica": "node patches/apply-incremunica-sse-fix.mjs",
     "build": "tsc",
-    "test": "node patches/sse-framing.test.mjs && tsc && node dist/replay.test.js"
+    "test": "node patches/sse-framing.test.mjs && tsc && node dist/replay.test.js && node dist/live-results.test.js"
   },
   "keywords": [],
   "author": "",

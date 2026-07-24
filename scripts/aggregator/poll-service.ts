@@ -57,6 +57,9 @@ interface Options {
   description: boolean;
   workload?: string;
   outFile?: string;
+  readyFile?: string;
+  resultMode: "poll" | "snapshot-and-stream";
+  resultPageSize: number;
 }
 
 function getArg(name: string): string | undefined {
@@ -177,6 +180,55 @@ function parseObservationCounts(body: string): { total: number | null; byPod: Ma
   }
 }
 
+interface PaginationMetadata {
+  snapshot?: string;
+  snapshotSequence?: number;
+  nextCursor?: string | null;
+  totalRows?: number;
+}
+
+interface AdditionEvent {
+  sequence: number;
+  source?: string;
+  count?: number;
+  binding: SparqlResultRow;
+}
+
+function paginationMetadata(parsed: unknown): PaginationMetadata {
+  return (
+    parsed as {
+      extensions?: { pagination?: PaginationMetadata };
+    }
+  )?.extensions?.pagination ?? {};
+}
+
+function addCounts(target: Map<string, number>, source: Map<string, number>): void {
+  for (const [pod, count] of source) {
+    target.set(pod, (target.get(pod) ?? 0) + count);
+  }
+}
+
+function parseSseMessages(buffer: string): {
+  events: Array<{ event: string; id?: string; data: string }>;
+  rest: string;
+} {
+  const normalized = buffer.replace(/\r\n/g, "\n");
+  const messages = normalized.split("\n\n");
+  const rest = messages.pop() ?? "";
+  const events = messages.map((message) => {
+    let event = "message";
+    let id: string | undefined;
+    const data: string[] = [];
+    for (const line of message.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("id:")) id = line.slice(3).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    return { event, id, data: data.join("\n") };
+  }).filter((event) => event.data !== "");
+  return { events, rest };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -213,6 +265,14 @@ function readOptions(): Options {
   if (outputNames.length > 1 && outputNames.length !== svcNames.length) {
     throw new Error("--output must contain either one value or the same number of comma-separated values as --svc");
   }
+  const resultMode = getArg("--result-mode") ?? "snapshot-and-stream";
+  if (resultMode !== "poll" && resultMode !== "snapshot-and-stream") {
+    throw new Error("--result-mode must be either poll or snapshot-and-stream");
+  }
+  const resultPageSize = Number(getArg("--result-page-size") ?? "25000");
+  if (!Number.isInteger(resultPageSize) || resultPageSize < 1 || resultPageSize > 50_000) {
+    throw new Error("--result-page-size must be an integer between 1 and 50000");
+  }
 
   return {
     user,
@@ -228,6 +288,9 @@ function readOptions(): Options {
     description: hasArg("--description"),
     workload: workload?.trim().toUpperCase(),
     outFile: getArg("--out"),
+    readyFile: getArg("--ready-file"),
+    resultMode,
+    resultPageSize,
   };
 }
 
@@ -335,6 +398,283 @@ async function pollEndpoint(
   }
 }
 
+async function fetchInitialSnapshot(
+  umaFetch: (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  opts: Options,
+  svcName: string,
+  outputName: string,
+  endpoint: string,
+  readyDeadline: number = Date.now() + 10 * 60_000,
+): Promise<{
+  sequence: number;
+  rows: number;
+  byPod: Map<string, number>;
+  snapshot?: string;
+}> {
+  const started = performance.now();
+  const byPod = new Map<string, number>();
+  const seenCursors = new Set<string>();
+  let cursor: string | null | undefined;
+  let sequence: number | undefined;
+  let snapshot: string | undefined;
+  let rows = 0;
+  let pages = 0;
+  let responseBytes = 0;
+  let jsonParseMs = 0;
+
+  do {
+    const url = new URL(endpoint);
+    url.searchParams.set("pageSize", String(opts.resultPageSize));
+    if (cursor) url.searchParams.set("cursor", cursor);
+
+    let response: Response;
+    let body: string;
+    while (true) {
+      response = await umaFetch(url, {
+        method: "GET",
+        headers: { Accept: "application/sparql-results+json, application/json" },
+      });
+      body = await response.text();
+      if (response.status !== 503 || pages > 0 || Date.now() >= readyDeadline) {
+        break;
+      }
+      console.error(
+        `Initial view for ${svcName} is still loading; retrying in 2 seconds`,
+      );
+      await sleep(Math.min(2_000, Math.max(0, readyDeadline - Date.now())));
+    }
+    responseBytes += Buffer.byteLength(body, "utf8");
+    if (!response.ok) {
+      throw new Error(`Snapshot page failed: ${response.status} ${body.slice(0, 500)}`);
+    }
+
+    const parseStarted = performance.now();
+    const parsed = JSON.parse(body);
+    const pageCounts = parseObservationCounts(body);
+    jsonParseMs += performance.now() - parseStarted;
+    if (pageCounts.total === null) {
+      throw new Error("Snapshot page was not a SPARQL JSON result");
+    }
+    rows += pageCounts.total;
+    addCounts(byPod, pageCounts.byPod);
+
+    const pagination = paginationMetadata(parsed);
+    if (sequence === undefined) sequence = Number(pagination.snapshotSequence);
+    if (!Number.isInteger(sequence) || sequence! < 0) {
+      throw new Error("Snapshot response did not contain a valid snapshotSequence");
+    }
+    if (snapshot === undefined) snapshot = pagination.snapshot;
+    if (pagination.snapshot !== snapshot) {
+      throw new Error("Snapshot ID changed while reading result pages");
+    }
+
+    cursor = pagination.nextCursor;
+    pages++;
+    if (pages > 100_000) throw new Error("Snapshot exceeded the page safety limit");
+    if (cursor) {
+      if (seenCursors.has(cursor)) throw new Error("Snapshot returned a repeated cursor");
+      seenCursors.add(cursor);
+    }
+  } while (cursor);
+
+  const common = {
+    run_id: opts.runId,
+    stage: "t7",
+    event: "snapshot_result",
+    aggregator: opts.aggregatorId,
+    requestor: opts.user,
+    workload: opts.workload,
+    service: svcName,
+    metric: metricForService(svcName),
+    output: outputName,
+    endpoint,
+    status: 200,
+    latency_ms: Math.round((performance.now() - started) * 1000) / 1000,
+    response_bytes: responseBytes,
+    rows,
+    snapshot,
+    snapshot_sequence: sequence,
+    page_count: pages,
+    page_size: opts.resultPageSize,
+    json_parse_ms: Math.round(jsonParseMs * 1000) / 1000,
+  };
+  if (byPod.size > 0) {
+    for (const [pod, observations] of byPod) {
+      logMeasurement(opts, { ...common, pod, patient: pod, observations });
+    }
+  }
+  // Keep an explicit aggregate as the final record for this timestamp. The
+  // verifier uses it when one service combines several patient sources.
+  logMeasurement(opts, { ...common, pod: "all", patient: "all", observations: rows });
+
+  return { sequence: sequence!, rows, byPod, snapshot };
+}
+
+function logStreamSummary(
+  opts: Options,
+  details: {
+    svcName: string;
+    outputName: string;
+    endpoint: string;
+    snapshotRows: number;
+    newRows: number;
+    byPod: Map<string, number>;
+    sequence: number;
+    reconnects: number;
+    event: "stream_summary" | "stream_finished";
+  },
+): void {
+  const common = {
+    run_id: opts.runId,
+    stage: "t7",
+    event: details.event,
+    aggregator: opts.aggregatorId,
+    requestor: opts.user,
+    workload: opts.workload,
+    service: details.svcName,
+    metric: metricForService(details.svcName),
+    output: details.outputName,
+    endpoint: details.endpoint,
+    status: 200,
+    rows: details.snapshotRows + details.newRows,
+    snapshot_rows: details.snapshotRows,
+    new_rows: details.newRows,
+    last_sequence: details.sequence,
+    reconnects: details.reconnects,
+  };
+  if (details.byPod.size > 0) {
+    for (const [pod, observations] of details.byPod) {
+      logMeasurement(opts, { ...common, pod, patient: pod, observations });
+    }
+  }
+  logMeasurement(opts, {
+    ...common,
+    pod: "all",
+    patient: "all",
+    observations: details.snapshotRows + details.newRows,
+  });
+}
+
+async function runSnapshotAndStream(
+  umaFetch: (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  opts: Options,
+  svcName: string,
+  outputName: string,
+  endpoint: string,
+  stopAt: number,
+  onSnapshotReady?: () => void,
+): Promise<void> {
+  const snapshot = await fetchInitialSnapshot(
+    umaFetch,
+    opts,
+    svcName,
+    outputName,
+    endpoint,
+    stopAt,
+  );
+  onSnapshotReady?.();
+  const totalsByPod = new Map(snapshot.byPod);
+  let sequence = snapshot.sequence;
+  let newRows = 0;
+  let reconnects = 0;
+  let lastSummaryAt = Date.now();
+
+  while (Date.now() < stopAt) {
+    const url = new URL(endpoint);
+    url.searchParams.set("mode", "changes");
+    url.searchParams.set("after", String(sequence));
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), Math.max(1, stopAt - Date.now()));
+
+    try {
+      const response = await umaFetch(url, {
+        method: "GET",
+        headers: {
+          Accept: "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Last-Event-ID": String(sequence),
+        },
+        signal: abort.signal,
+      });
+      if (!response.ok || !response.body) {
+        const body = await response.text();
+        throw new Error(`Change stream failed: ${response.status} ${body.slice(0, 500)}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (Date.now() < stopAt) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parsedMessages = parseSseMessages(buffer);
+        buffer = parsedMessages.rest;
+
+        for (const message of parsedMessages.events) {
+          if (message.event === "add") {
+            const addition = JSON.parse(message.data) as AdditionEvent;
+            if (!Number.isInteger(addition.sequence) || addition.sequence <= sequence) {
+              continue;
+            }
+            if (addition.sequence !== sequence + 1) {
+              throw new Error(
+                `Change stream sequence gap: expected ${sequence + 1}, received ${addition.sequence}`,
+              );
+            }
+            sequence = addition.sequence;
+            const count = Number.isInteger(addition.count) && (addition.count ?? 0) > 0
+              ? addition.count!
+              : 1;
+            newRows += count;
+            const pod = datasetValue(addition.binding) ?? "unknown";
+            totalsByPod.set(pod, (totalsByPod.get(pod) ?? 0) + count);
+          }
+        }
+
+        if (Date.now() - lastSummaryAt >= opts.intervalMs) {
+          logStreamSummary(opts, {
+            svcName,
+            outputName,
+            endpoint,
+            snapshotRows: snapshot.rows,
+            newRows,
+            byPod: totalsByPod,
+            sequence,
+            reconnects,
+            event: "stream_summary",
+          });
+          lastSummaryAt = Date.now();
+        }
+      }
+    } catch (err) {
+      if ((err as { name?: string })?.name !== "AbortError" || Date.now() < stopAt - 100) {
+        throw err;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (Date.now() < stopAt) {
+      reconnects++;
+      await sleep(Math.min(1000, Math.max(0, stopAt - Date.now())));
+    }
+  }
+
+  logStreamSummary(opts, {
+    svcName,
+    outputName,
+    endpoint,
+    snapshotRows: snapshot.rows,
+    newRows,
+    byPod: totalsByPod,
+    sequence,
+    reconnects,
+    event: "stream_finished",
+  });
+}
+
 async function main() {
   const opts = readOptions();
   const stopAt = opts.durationMs > 0 ? Date.now() + opts.durationMs : Number.POSITIVE_INFINITY;
@@ -358,6 +698,51 @@ async function main() {
   console.error(`Polling services: ${opts.svcNames.join(", ")}`);
   if (!opts.description) console.error(`Polling outputs: ${opts.outputNames.join(", ")}`);
   console.error(`Interval: ${opts.intervalMs}ms`);
+  console.error(`Result mode: ${opts.description ? "description-poll" : opts.resultMode}`);
+
+  if (!opts.description && opts.resultMode === "snapshot-and-stream") {
+    const stopAt = opts.durationMs > 0 ? Date.now() + opts.durationMs : Number.POSITIVE_INFINITY;
+    if (!Number.isFinite(stopAt)) {
+      throw new Error("snapshot-and-stream mode requires a finite --duration");
+    }
+    let readyServices = 0;
+    let readyFileWritten = false;
+    const markSnapshotReady = () => {
+      readyServices++;
+      if (
+        !readyFileWritten &&
+        readyServices === opts.svcNames.length &&
+        opts.readyFile
+      ) {
+        writeFileSync(
+          opts.readyFile,
+          `${JSON.stringify({
+            run_id: opts.runId,
+            services: opts.svcNames,
+            ready_at: new Date().toISOString(),
+          })}\n`,
+          "utf8",
+        );
+        readyFileWritten = true;
+        console.error(`All initial service snapshots ready: ${opts.readyFile}`);
+      }
+    };
+
+    await Promise.all(opts.svcNames.map((svcName, index) => {
+      const outputName = outputForService(opts, index);
+      const endpoint = `${opts.aggregatorServer}/${opts.aggregatorId}/${svcName}/${outputName}`;
+      return runSnapshotAndStream(
+        umaFetch,
+        opts,
+        svcName,
+        outputName,
+        endpoint,
+        stopAt,
+        markSnapshotReady,
+      );
+    }));
+    return;
+  }
 
   let poll = 0;
   while (poll < opts.count && Date.now() <= stopAt) {
@@ -370,8 +755,29 @@ async function main() {
       const outputEndpoint = `${serviceEndpoint}/${outputName}`;
       const endpoint = opts.description ? serviceEndpoint : outputEndpoint;
 
+      if (!opts.description && opts.resultMode === "poll") {
+        return fetchInitialSnapshot(umaFetch, opts, svcName, outputName, endpoint);
+      }
       return pollEndpoint(umaFetch, opts, svcName, outputName, endpoint, poll, roundStartedAt);
     }));
+
+    if (
+      poll === 1 &&
+      !opts.description &&
+      opts.resultMode === "poll" &&
+      opts.readyFile
+    ) {
+      writeFileSync(
+        opts.readyFile,
+        `${JSON.stringify({
+          run_id: opts.runId,
+          services: opts.svcNames,
+          ready_at: new Date().toISOString(),
+        })}\n`,
+        "utf8",
+      );
+      console.error(`All initial service snapshots ready: ${opts.readyFile}`);
+    }
 
     if (poll < opts.count && Date.now() + opts.intervalMs <= stopAt) {
       await sleep(opts.intervalMs);

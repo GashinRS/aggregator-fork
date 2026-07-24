@@ -1,13 +1,86 @@
-import { querySources, materializedViewToSparqlJson } from "./query.js";
+import { querySources } from "./query.js";
 import Fastify from "fastify";
 import { Mutex } from "async-mutex";
 import { logMeasurement, viewRowCount } from "./measurement.js";
+import { AdditionEvent, LiveResultError, LiveResultStore } from "./live-results.js";
+import type { ServerResponse } from "node:http";
+
+const DEFAULT_RESULT_PAGE_SIZE = parseInt(process.env.RESULT_PAGE_SIZE || "25000", 10);
+const MAX_RESULT_PAGE_SIZE = parseInt(process.env.RESULT_MAX_PAGE_SIZE || "50000", 10);
+const RESULT_SNAPSHOT_TTL_MS = parseInt(process.env.RESULT_SNAPSHOT_TTL_MS || "300000", 10);
+const RESULT_MAX_SNAPSHOTS = parseInt(process.env.RESULT_MAX_SNAPSHOTS || "4", 10);
+const RESULT_REPLAY_LIMIT = parseInt(process.env.RESULT_REPLAY_LIMIT || "100000", 10);
+const RESULT_HEARTBEAT_MS = parseInt(process.env.RESULT_HEARTBEAT_MS || "15000", 10);
+
+function parsePageSize(value: unknown): number {
+  const parsed = value === undefined ? DEFAULT_RESULT_PAGE_SIZE : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_RESULT_PAGE_SIZE) {
+    throw new LiveResultError(
+      `pageSize must be an integer between 1 and ${MAX_RESULT_PAGE_SIZE}`,
+      400,
+    );
+  }
+  return parsed;
+}
+
+function sseEvent(event: AdditionEvent): string {
+  return `id: ${event.sequence}\nevent: add\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+class SseWriter {
+  private readonly queue: string[] = [];
+  private waitingForDrain = false;
+  private closed = false;
+
+  constructor(
+    private readonly response: ServerResponse,
+    private readonly maxQueuedEvents = 5_000,
+  ) {}
+
+  enqueue(value: string): boolean {
+    if (this.closed || this.response.destroyed) return false;
+    if (this.queue.length >= this.maxQueuedEvents) {
+      this.close();
+      return false;
+    }
+    this.queue.push(value);
+    this.flush();
+    return !this.closed;
+  }
+
+  close(): void {
+    this.closed = true;
+    this.queue.length = 0;
+    if (!this.response.destroyed) this.response.destroy();
+  }
+
+  private flush(): void {
+    if (this.waitingForDrain || this.closed) return;
+    while (this.queue.length > 0) {
+      const chunk = this.queue.shift()!;
+      if (!this.response.write(chunk)) {
+        this.waitingForDrain = true;
+        this.response.once("drain", () => {
+          this.waitingForDrain = false;
+          this.flush();
+        });
+        return;
+      }
+    }
+  }
+}
 
 async function main() {
   console.log("[BOOT] Starting application...");
 
   const mutex = new Mutex();
   const view: Map<string, { bindings: any; count: number }> = new Map();
+  const liveResults = new LiveResultStore(
+    RESULT_REPLAY_LIMIT,
+    RESULT_SNAPSHOT_TTL_MS,
+    RESULT_MAX_SNAPSHOTS,
+  );
+  let initialQueryReady = false;
 
   // =========================
   // ENV VALIDATION
@@ -64,7 +137,19 @@ async function main() {
     SCHEMA,
     context,
     view,
-    mutex
+    mutex,
+    (bindings, source, count) => {
+      // Initial rows belong to the paginated snapshot, not the live change
+      // feed. Once every source has completed its static query, additions are
+      // sequenced and retained for reconnect replay.
+      if (initialQueryReady) {
+        liveResults.recordAddition(bindings, source, count);
+      }
+    },
+    () => {
+      initialQueryReady = true;
+      console.log(`[QUERY] Initial materialized view ready (${viewRowCount(view)} rows)`);
+    },
   ).catch((err) => {
     console.error("[QUERY] querySources failed:", err);
   });
@@ -78,25 +163,100 @@ async function main() {
 
   app.get("/", async (request, reply) => {
     console.log(`[HTTP] Incoming request from ${request.ip}`);
+    const query = request.query as {
+      mode?: string;
+      after?: string;
+      cursor?: string;
+      pageSize?: string;
+    };
+
+    if (!initialQueryReady) {
+      reply.header("Retry-After", "2");
+      reply.status(503);
+      return {
+        error: "Initial materialized view is still loading",
+        ready: false,
+      };
+    }
+
+    if (query.mode === "changes") {
+      const afterHeader = request.headers["last-event-id"];
+      const afterText = query.after ?? (Array.isArray(afterHeader) ? afterHeader[0] : afterHeader) ?? "0";
+      const after = Number(afterText);
+      const raw = reply.raw;
+
+      try {
+        let closed = false;
+        const writer = new SseWriter(raw);
+        const subscription = liveResults.subscribe(
+          after,
+          (event) => !closed && writer.enqueue(sseEvent(event)),
+        );
+
+        reply.hijack();
+        raw.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          "Connection": "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        raw.flushHeaders();
+
+        for (const event of subscription.replay) {
+          if (!writer.enqueue(sseEvent(event))) {
+            closed = true;
+            break;
+          }
+        }
+
+        const heartbeat = setInterval(() => {
+          if (closed || raw.destroyed) return;
+          if (!writer.enqueue(`event: heartbeat\ndata: {"sequence":${liveResults.currentSequence()}}\n\n`)) {
+            closed = true;
+          }
+        }, RESULT_HEARTBEAT_MS);
+
+        request.raw.on("close", () => {
+          closed = true;
+          writer.close();
+          clearInterval(heartbeat);
+          subscription.unsubscribe();
+        });
+        return;
+      } catch (err) {
+        const status = err instanceof LiveResultError ? err.statusCode : 500;
+        reply.status(status);
+        return {
+          error: err instanceof Error ? err.message : String(err),
+          currentSequence: liveResults.currentSequence(),
+        };
+      }
+    }
 
     return mutex.runExclusive(async () => {
-      console.log("[HTTP] Acquired mutex, preparing response");
+      console.log("[HTTP] Acquired mutex, preparing snapshot page");
 
       try {
         const started = performance.now();
-        const result = materializedViewToSparqlJson(view);
+        const pageSize = parsePageSize(query.pageSize);
+        const result = query.cursor
+          ? liveResults.nextPage(query.cursor, pageSize)
+          : liveResults.firstPage(view, pageSize);
         const serializeMs = Math.round((performance.now() - started) * 1000) / 1000;
         const rows = result.results.bindings.length;
-        console.log(`[HTTP] Returning result with ${view.size} entries`);
+        console.log(`[HTTP] Returning page with ${rows} rows from ${view.size} entries`);
         logMeasurement({
           stage: "service_read",
-          event: "http_result",
+          event: "http_result_page",
           pod: "all",
           observations: rows,
           request_ip: request.ip,
           view_unique: view.size,
           view_rows: viewRowCount(view),
           result_rows: rows,
+          snapshot: result.extensions.pagination.snapshot,
+          snapshot_sequence: result.extensions.pagination.snapshotSequence,
+          page_complete: result.extensions.pagination.nextCursor === null,
           serialize_ms: serializeMs
         });
 
@@ -112,7 +272,7 @@ async function main() {
           request_ip: request.ip,
           error: err instanceof Error ? err.message : String(err),
         });
-        reply.status(500);
+        reply.status(err instanceof LiveResultError ? err.statusCode : 500);
         return { error: "Internal server error" };
       }
     });

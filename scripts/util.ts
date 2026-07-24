@@ -261,7 +261,14 @@ function umaRptCacheKey(url: RequestInfo | URL, init: RequestInit): string {
         url instanceof URL ? url.toString() :
         url.url;
 
-    return `${method} ${urlString}`;
+    // UMA protects a method and resource path, not pagination cursors.
+    // Reuse one RPT across snapshot pages and SSE reconnects.
+    try {
+        const parsed = new URL(urlString);
+        return `${method} ${parsed.origin}${parsed.pathname}`;
+    } catch {
+        return `${method} ${urlString.split("?")[0]}`;
+    }
 }
 
 function shouldRetryWithoutCachedRpt(response: Response): boolean {

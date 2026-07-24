@@ -327,7 +327,10 @@ func (collec *ServiceCollection) HandleServiceOutput(w http.ResponseWriter, r *h
 		mapping.Port,
 		mapping.Path,
 	)
-	req, err := http.NewRequest(r.Method, forwardURL, r.Body)
+	if r.URL.RawQuery != "" {
+		forwardURL += "?" + r.URL.RawQuery
+	}
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, forwardURL, r.Body)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to create forward request")
 		http.Error(w, "Failed to reach requested service", http.StatusInternalServerError)
@@ -356,10 +359,39 @@ func (collec *ServiceCollection) HandleServiceOutput(w http.ResponseWriter, r *h
 		}
 	}
 
-	// Write status code
-	w.WriteHeader(resp.StatusCode)
+	// SSE is an indefinitely long response. Flush every copied block so neither
+	// net/http nor an upstream reverse proxy waits for a larger response buffer.
+	isSSE := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+	if isSSE {
+		w.Header().Set("X-Accel-Buffering", "no")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported by response writer", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(resp.StatusCode)
+		flusher.Flush()
+		buffer := make([]byte, 32*1024)
+		for {
+			n, readErr := resp.Body.Read(buffer)
+			if n > 0 {
+				if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
+					logrus.WithError(writeErr).Debug("SSE client disconnected")
+					return
+				}
+				flusher.Flush()
+			}
+			if readErr != nil {
+				if readErr != io.EOF {
+					logrus.WithError(readErr).Error("Failed to read streaming service response")
+				}
+				return
+			}
+		}
+	}
 
-	// Copy response body
+	// Ordinary snapshot pages can use the efficient buffered copy path.
+	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		logrus.WithError(err).Error("Failed to copy response body")
 	}

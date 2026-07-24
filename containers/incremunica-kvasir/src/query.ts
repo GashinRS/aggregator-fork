@@ -43,7 +43,9 @@ export async function querySources(
   schema: string,
   context: Record<string, string>,
   view: Map<string,{bindings: any, count: number}>,
-  mutex: Mutex
+  mutex: Mutex,
+  onAddition?: (bindings: any, source?: string, count?: number) => void,
+  onInitialQueryReady?: () => void,
 ) {
   console.log("[QUERY] Initializing QueryEngine...");
   const engine = new QueryEngine();
@@ -56,6 +58,45 @@ export async function querySources(
     observationsBySource: new Map(),
   };
   const sourceContributions = new Map<string, Map<string, number>>();
+  const normalizedEndpoints = new Set(endpoints.map(endpoint => endpoint.replace(/\/+$/u, "")));
+  const readyEndpoints = new Set<string>();
+  let initialBoundaryScheduled = false;
+
+  const scheduleInitialBoundary = () => {
+    if (
+      initialBoundaryScheduled ||
+      readyEndpoints.size !== normalizedEndpoints.size
+    ) {
+      return;
+    }
+    initialBoundaryScheduled = true;
+
+    // Initial bindings are applied through the same mutex. Queueing the ready
+    // marker on that mutex ensures every already-delivered initial binding is
+    // visible before snapshot requests are admitted.
+    void mutex.runExclusive(() => {
+      onInitialQueryReady?.();
+    });
+  };
+
+  // Incremunica executes the paginated static query first and only opens its
+  // GraphQL subscription after the last static page. Observing the first
+  // successful SSE request for every endpoint therefore gives us an exact
+  // boundary between initial materialization and later live additions.
+  const queryFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const response = await umaProxyFetch(input, init);
+    if (response.ok && isSseInit(init)) {
+      const endpoint = input.toString().replace(/\/+$/u, "");
+      if (normalizedEndpoints.has(endpoint) && !readyEndpoints.has(endpoint)) {
+        readyEndpoints.add(endpoint);
+        console.log(
+          `[QUERY] Initial query complete for ${endpoint} (${readyEndpoints.size}/${normalizedEndpoints.size})`,
+        );
+        scheduleInitialBoundary();
+      }
+    }
+    return response;
+  };
 
   console.log(`[QUERY] Preparing ${endpoints.length} endpoints`);
   const sources = endpoints.map(endpoint => {
@@ -140,6 +181,7 @@ export async function querySources(
     } else {
       view.set(key, { bindings, count });
     }
+    onAddition?.(bindings, source, count);
 
     const contributions = sourceContributions.get(source) ?? new Map<string, number>();
     contributions.set(key, (contributions.get(key) ?? 0) + count);
@@ -293,6 +335,7 @@ export async function querySources(
             console.log("[VIEW] Added new entry with count=1");
           }
         }
+        onAddition?.(b, source, 1);
 
         if (source && contributions) {
           contributions.set(key, sourceCount + 1);
@@ -355,7 +398,7 @@ export async function querySources(
     try {
       bindingsStream = await engine.queryBindings(query, {
         sources: <any>[source],
-        fetch: umaProxyFetch
+        fetch: queryFetch
       });
     } catch (err) {
       console.error(`[STREAM] Failed to start query stream for ${source.value}:`, err);
