@@ -40,7 +40,7 @@ COPY --from=builder /app/dist ./dist
 
 # Environment variable (can be overridden)
 ENV NODE_ENV=production
-ENV NODE_OPTIONS="--max-old-space-size=20480"
+ENV NODE_OPTIONS="--max-old-space-size=26000"
 
 # Expose port
 EXPOSE 3000
