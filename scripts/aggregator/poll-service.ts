@@ -616,12 +616,12 @@ async function runSnapshotAndStream(
     endpoint,
     stopAt,
   );
-  onSnapshotReady?.();
   const totalsByPod = new Map(snapshot.byPod);
   let sequence = snapshot.sequence;
   let newRows = 0;
   let reconnects = 0;
   let lastSummaryAt = Date.now();
+  let snapshotReadySignalled = false;
 
   while (Date.now() < stopAt) {
     const url = new URL(endpoint);
@@ -674,6 +674,24 @@ async function runSnapshotAndStream(
             newRows += count;
             const pod = datasetValue(addition.binding) ?? "unknown";
             totalsByPod.set(pod, (totalsByPod.get(pod) ?? 0) + count);
+          } else if (message.event === "replay-complete" && !snapshotReadySignalled) {
+            // Every replayed addition is ordered before this marker. Persist the
+            // caught-up view as the authoritative pre-stream baseline before the
+            // orchestrator is allowed to launch any streamers.
+            logStreamSummary(opts, {
+              svcName,
+              outputName,
+              endpoint,
+              snapshotRows: snapshot.rows,
+              newRows,
+              byPod: totalsByPod,
+              sequence,
+              reconnects,
+              event: "stream_summary",
+            });
+            lastSummaryAt = Date.now();
+            snapshotReadySignalled = true;
+            onSnapshotReady?.();
           }
         }
 

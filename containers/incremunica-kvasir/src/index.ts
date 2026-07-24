@@ -202,7 +202,13 @@ async function main() {
 
       try {
         let closed = false;
-        const writer = new SseWriter(raw);
+        // A client subscribes only after it has downloaded every snapshot page.
+        // Additions that arrived during that download are replayed synchronously
+        // below to preserve their sequence relative to new live additions. The
+        // writer therefore needs room for the bounded replay window plus a small
+        // live tail; the previous fixed 5,000-event queue disconnected clients
+        // whenever a large snapshot accumulated a larger catch-up backlog.
+        const writer = new SseWriter(raw, RESULT_REPLAY_LIMIT + 5_000);
         const subscription = liveResults.subscribe(
           after,
           (event) => !closed && writer.enqueue(sseEvent(event)),
@@ -223,6 +229,17 @@ async function main() {
             break;
           }
         }
+        // This marker is ordered after every replay event and before any later
+        // event-loop turn can publish a new live addition. A client that receives
+        // it has caught up from its snapshot sequence and can safely use the
+        // current count as its pre-stream baseline.
+        if (!closed) {
+          if (!writer.enqueue(
+            `event: replay-complete\ndata: {"sequence":${liveResults.currentSequence()}}\n\n`,
+          )) {
+            closed = true;
+          }
+        }
 
         const heartbeat = setInterval(() => {
           if (closed || raw.destroyed) return;
@@ -231,7 +248,13 @@ async function main() {
           }
         }, RESULT_HEARTBEAT_MS);
 
-        request.raw.on("close", () => {
+        // An IncomingMessage "close" means that the request has finished being
+        // received on current Node versions; it does not reliably mean that the
+        // client has closed the long-lived SSE response. Cleaning up there can
+        // unsubscribe immediately after the GET request is parsed. The outgoing
+        // ServerResponse remains open for the lifetime of the SSE connection, so
+        // its "close" event is the correct disconnect signal.
+        raw.on("close", () => {
           closed = true;
           writer.close();
           clearInterval(heartbeat);
