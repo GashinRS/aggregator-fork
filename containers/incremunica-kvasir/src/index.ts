@@ -81,6 +81,7 @@ async function main() {
     RESULT_MAX_SNAPSHOTS,
   );
   let initialQueryReady = false;
+  let initialQueryRows = 0;
 
   // =========================
   // ENV VALIDATION
@@ -147,8 +148,9 @@ async function main() {
       }
     },
     () => {
+      initialQueryRows = viewRowCount(view);
       initialQueryReady = true;
-      console.log(`[QUERY] Initial materialized view ready (${viewRowCount(view)} rows)`);
+      console.log(`[QUERY] Initial materialized view ready (${initialQueryRows} rows)`);
     },
   ).catch((err) => {
     console.error("[QUERY] querySources failed:", err);
@@ -162,13 +164,26 @@ async function main() {
   });
 
   app.get("/", async (request, reply) => {
-    console.log(`[HTTP] Incoming request from ${request.ip}`);
     const query = request.query as {
       mode?: string;
       after?: string;
       cursor?: string;
       pageSize?: string;
     };
+
+    // This endpoint stays constant-time while the potentially large initial
+    // materialized view is being built. Clients use it to avoid repeatedly
+    // requesting the actual result.
+    if (query.mode === "status") {
+      reply.header("Cache-Control", "no-store");
+      return {
+        ready: initialQueryReady,
+        rows: initialQueryReady ? initialQueryRows : null,
+        sequence: liveResults.currentSequence(),
+      };
+    }
+
+    console.log(`[HTTP] Incoming request from ${request.ip}`);
 
     if (!initialQueryReady) {
       reply.header("Retry-After", "2");

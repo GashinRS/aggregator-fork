@@ -311,6 +311,51 @@ function outputForService(opts: Options, index: number): string {
   return opts.outputNames[index] ?? opts.outputNames[0];
 }
 
+async function waitForInitialViewReady(
+  umaFetch: (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  opts: Options,
+  svcName: string,
+  endpoint: string,
+  readyDeadline: number,
+): Promise<void> {
+  const statusUrl = new URL(endpoint);
+  statusUrl.searchParams.set("mode", "status");
+  const checkIntervalMs = Math.min(Math.max(opts.intervalMs, 5_000), 30_000);
+  let announced = false;
+
+  while (Date.now() < readyDeadline) {
+    const response = await umaFetch(statusUrl, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(
+        `Initial-view readiness check failed: ${response.status} ${body.slice(0, 500)}`,
+      );
+    }
+
+    const status = JSON.parse(body) as { ready?: unknown };
+    if (status.ready === true) {
+      console.error(`Initial view for ${svcName} is ready; fetching snapshot`);
+      return;
+    }
+    if (status.ready !== false) {
+      throw new Error("Initial-view readiness response did not contain a boolean ready field");
+    }
+
+    if (!announced) {
+      console.error(
+        `Waiting for ${svcName}'s initial view; checking lightweight status every ${checkIntervalMs}ms`,
+      );
+      announced = true;
+    }
+    await sleep(Math.min(checkIntervalMs, Math.max(0, readyDeadline - Date.now())));
+  }
+
+  throw new Error(`Timed out waiting for ${svcName}'s initial view`);
+}
+
 async function pollEndpoint(
   umaFetch: (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
   opts: Options,
@@ -422,6 +467,14 @@ async function fetchInitialSnapshot(
   let responseBytes = 0;
   let jsonParseMs = 0;
 
+  await waitForInitialViewReady(
+    umaFetch,
+    opts,
+    svcName,
+    endpoint,
+    readyDeadline,
+  );
+
   do {
     const url = new URL(endpoint);
     url.searchParams.set("pageSize", String(opts.resultPageSize));
@@ -429,20 +482,11 @@ async function fetchInitialSnapshot(
 
     let response: Response;
     let body: string;
-    while (true) {
-      response = await umaFetch(url, {
-        method: "GET",
-        headers: { Accept: "application/sparql-results+json, application/json" },
-      });
-      body = await response.text();
-      if (response.status !== 503 || pages > 0 || Date.now() >= readyDeadline) {
-        break;
-      }
-      console.error(
-        `Initial view for ${svcName} is still loading; retrying in 2 seconds`,
-      );
-      await sleep(Math.min(2_000, Math.max(0, readyDeadline - Date.now())));
-    }
+    response = await umaFetch(url, {
+      method: "GET",
+      headers: { Accept: "application/sparql-results+json, application/json" },
+    });
+    body = await response.text();
     responseBytes += Buffer.byteLength(body, "utf8");
     if (!response.ok) {
       throw new Error(`Snapshot page failed: ${response.status} ${body.slice(0, 500)}`);
