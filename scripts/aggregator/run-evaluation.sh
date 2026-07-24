@@ -96,8 +96,8 @@ if [[ "$RESULT_MODE" != "snapshot-and-stream" && "$RESULT_MODE" != "poll" ]]; th
   exit 1
 fi
 if [[ ! "$RESULT_PAGE_SIZE" =~ ^[0-9]+$ ]] ||
-   (( RESULT_PAGE_SIZE < 1 || RESULT_PAGE_SIZE > 50000 )); then
-  echo "--result-page-size must be an integer between 1 and 50000" >&2
+   (( RESULT_PAGE_SIZE < 1 || RESULT_PAGE_SIZE > 500000 )); then
+  echo "--result-page-size must be an integer between 1 and 500000" >&2
   exit 1
 fi
 
