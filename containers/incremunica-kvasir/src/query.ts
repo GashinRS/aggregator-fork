@@ -2,7 +2,6 @@ import { QueryEngine } from "@incremunica/query-sparql-incremental";
 import { isAddition } from '@incremunica/user-tools';
 import { Mutex } from "async-mutex";
 import { Agent } from "undici";
-import { materializedBindingKey } from "./identity.js";
 import { logMeasurement, viewRowCount } from "./measurement.js";
 import { copyReplaySnapshot } from "./replay.js";
 
@@ -13,14 +12,6 @@ const STREAM_RECONNECT_INITIAL_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_
 const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_DELAY_MS || "30000", 10);
 const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_BACKOFF_FACTOR || "2");
 const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || "30000", 10);
-// Incremunica now paginates its own initial evaluation. Keep the legacy, metric-specific
-// catch-up available only as an explicit fallback so the snapshot is not loaded twice.
-const STATIC_CATCHUP_ENABLED = process.env.STATIC_CATCHUP_ENABLED === "1";
-const STATIC_CATCHUP_PAGE_SIZE = parseInt(process.env.STATIC_CATCHUP_PAGE_SIZE || "50000", 10);
-const STATIC_CATCHUP_MAX_PAGES = parseInt(process.env.STATIC_CATCHUP_MAX_PAGES || "5000", 10);
-
-const XSD_DATE_TIME = "http://www.w3.org/2001/XMLSchema#dateTime";
-const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 
 const streamingDispatcher = new Agent({
   bodyTimeout: 0,
@@ -41,21 +32,9 @@ interface ReplayState {
   reconnectAttempt: number;
   seen: Map<string, number>;
   bindings: Map<string, any>;
-  stableKeys: Set<string>;
   settled: boolean;
   closed: boolean;
   settleTimer?: ReturnType<typeof setTimeout>;
-}
-
-interface ObservationStaticCatchupPlan {
-  metricToken: string;
-  metricIri: string;
-  graphqlFilterValue: string;
-}
-
-interface GraphQLPaginationInfo {
-  path?: unknown;
-  next?: unknown;
 }
 
 export async function querySources(
@@ -90,14 +69,6 @@ export async function querySources(
       }
     }
   });
-  const staticCatchupPlan = STATIC_CATCHUP_ENABLED ? buildObservationStaticCatchupPlan(query, context) : undefined;
-  const staticCatchupsInFlight = new Set<string>();
-  if (staticCatchupPlan) {
-    console.log(`[QUERY] Static catch-up enabled for metric ${staticCatchupPlan.metricToken}`);
-  } else if (STATIC_CATCHUP_ENABLED) {
-    console.log("[QUERY] Static catch-up unavailable for this query shape; falling back to stream replay");
-  }
-
   const emitViewUpdate = (source?: string, options: { force?: boolean; reason?: string } = {}) => {
     const now = Date.now();
     if (!counters.changedSinceLastLog) return;
@@ -159,92 +130,28 @@ export async function querySources(
     key: string,
     bindings: any,
     count: number,
-    stable: boolean,
   ) => {
     if (count <= 0) return 0;
 
     const entry = view.get(key);
     if (entry) {
       entry.bindings = bindings;
-      entry.count = stable ? 1 : entry.count + count;
+      entry.count += count;
     } else {
-      view.set(key, { bindings, count: stable ? 1 : count });
+      view.set(key, { bindings, count });
     }
 
     const contributions = sourceContributions.get(source) ?? new Map<string, number>();
-    contributions.set(key, stable ? 1 : (contributions.get(key) ?? 0) + count);
+    contributions.set(key, (contributions.get(key) ?? 0) + count);
     sourceContributions.set(source, contributions);
 
-    const addedRows = stable ? 1 : count;
+    const addedRows = count;
     counters.observationsBySource.set(
       source,
       (counters.observationsBySource.get(source) ?? 0) + addedRows,
     );
 
     return addedRows;
-  };
-
-  const applyReplayProgress = async (
-    replay: ReplayState,
-    pageEntries: Map<string, { bindings: any; count: number; stable: boolean }>,
-    page: number,
-  ) => {
-    if (pageEntries.size === 0) return;
-
-    await mutex.runExclusive(() => {
-      const contributions = sourceContributions.get(replay.source) ?? new Map<string, number>();
-      let addedRows = 0;
-
-      for (const [key, pageEntry] of pageEntries) {
-        const desiredCount = replay.stableKeys.has(key)
-          ? 1
-          : (replay.seen.get(key) ?? pageEntry.count);
-        const currentCount = contributions.get(key) ?? 0;
-        const missingCount = desiredCount - currentCount;
-
-        if (missingCount <= 0) {
-          const viewEntry = view.get(key);
-          if (viewEntry) {
-            viewEntry.bindings = pageEntry.bindings;
-            if (pageEntry.stable) {
-              viewEntry.count = 1;
-            }
-          }
-          continue;
-        }
-
-        addedRows += addSourceContribution(
-          replay.source,
-          key,
-          pageEntry.bindings,
-          missingCount,
-          pageEntry.stable,
-        );
-      }
-
-      if (addedRows === 0) return;
-
-      counters.totalAdds += addedRows;
-      counters.changedSinceLastLog = true;
-
-      logMeasurement({
-        stage: "t6",
-        event: "static_catchup_progress",
-        pod: replay.source,
-        observations: counters.observationsBySource.get(replay.source) ?? 0,
-        source: replay.source,
-        reconnect_attempt: replay.reconnectAttempt,
-        page,
-        added_rows: addedRows,
-        replay_rows: copyReplaySnapshot(replay.seen).rows,
-        view_unique: view.size,
-        view_rows: viewRowCount(view),
-        total_adds: counters.totalAdds,
-        total_removes: counters.totalRemoves,
-        source_resets: counters.sourceResets,
-      });
-      emitViewUpdate(replay.source, { force: true, reason: "static_catchup_progress" });
-    });
   };
 
   const reconcileReplay = async (replay: ReplayState) => {
@@ -291,30 +198,23 @@ export async function querySources(
       for (const [key, desiredCount] of replay.seen) {
         const currentCount = previousContributions.get(key) ?? 0;
         const bindings = replay.bindings.get(key);
-        const stable = replay.stableKeys.has(key);
-        const targetCount = stable ? Math.min(desiredCount, 1) : desiredCount;
+        const targetCount = desiredCount;
         if (!bindings) continue;
 
         if (targetCount > currentCount) {
-          addedRows += addSourceContribution(replay.source, key, bindings, targetCount - currentCount, stable);
+          addedRows += addSourceContribution(replay.source, key, bindings, targetCount - currentCount);
           continue;
         }
 
         const entry = view.get(key);
         if (entry) {
           entry.bindings = bindings;
-          if (stable) {
-            entry.count = 1;
-          }
         } else {
-          addedRows += addSourceContribution(replay.source, key, bindings, targetCount, stable);
+          addedRows += addSourceContribution(replay.source, key, bindings, targetCount);
         }
       }
 
-      const reconciledContributions = new Map<string, number>();
-      for (const [key, count] of replay.seen) {
-        reconciledContributions.set(key, replay.stableKeys.has(key) ? Math.min(count, 1) : count);
-      }
+      const reconciledContributions = new Map(replay.seen);
       sourceContributions.set(replay.source, reconciledContributions);
       let sourceRows = 0;
       for (const count of reconciledContributions.values()) {
@@ -352,175 +252,13 @@ export async function querySources(
     });
   };
 
-  const runStaticCatchup = async (source: typeof sources[number], reconnectAttempt: number) => {
-    if (!staticCatchupPlan) return false;
-    if (staticCatchupsInFlight.has(source.value)) {
-      if (DEBUG_VIEW_EVENTS) {
-        console.log(`[STATIC] Catch-up already running for ${source.value}, skipping overlapping run`);
-      }
-      return false;
-    }
-    staticCatchupsInFlight.add(source.value);
-
-    const replay: ReplayState = {
-      source: source.value,
-      reconnectAttempt,
-      seen: new Map(),
-      bindings: new Map(),
-      stableKeys: new Set(),
-      settled: false,
-      closed: false,
-    };
-
-    logMeasurement({
-      stage: "t6",
-      event: "static_catchup_started",
-      pod: source.value,
-      observations: counters.observationsBySource.get(source.value) ?? 0,
-      source: source.value,
-      reconnect_attempt: reconnectAttempt,
-      page_size: STATIC_CATCHUP_PAGE_SIZE,
-      metric: staticCatchupPlan.metricToken,
-    });
-
-    try {
-      let cursor: string | undefined;
-      let page = 0;
-      do {
-        page++;
-        if (page > STATIC_CATCHUP_MAX_PAGES) {
-          throw new Error(`Static catch-up exceeded ${STATIC_CATCHUP_MAX_PAGES} pages`);
-        }
-
-        const graphqlQuery = buildObservationStaticCatchupQuery(staticCatchupPlan, cursor);
-        const response = await umaProxyFetch(source.value, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            "@context": context,
-            query: graphqlQuery,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Static catch-up query failed: ${response.status} ${response.statusText}`);
-        }
-
-        const body = await response.json() as any;
-        if (body.errors) {
-          throw new Error(`Static catch-up returned GraphQL errors: ${JSON.stringify(body.errors)}`);
-        }
-
-        const observations = Array.isArray(body?.data?.saref_Observation)
-          ? body.data.saref_Observation
-          : [];
-        const pageEntries = new Map<string, { bindings: any; count: number; stable: boolean }>();
-
-        for (const observation of observations) {
-          if (!observationMatchesMetric(observation, staticCatchupPlan)) continue;
-
-          const binding = observationToBinding(observation);
-          const { key, stable } = materializedBindingKey(binding, source.value);
-          replay.seen.set(key, stable ? 1 : (replay.seen.get(key) ?? 0) + 1);
-          replay.bindings.set(key, binding);
-          if (stable) {
-            replay.stableKeys.add(key);
-          }
-          const currentPageEntry = pageEntries.get(key);
-          pageEntries.set(key, {
-            bindings: binding,
-            count: stable ? 1 : (currentPageEntry?.count ?? 0) + 1,
-            stable,
-          });
-        }
-
-        await applyReplayProgress(replay, pageEntries, page);
-
-        cursor = findNextCursor(body?.extensions?.pagination);
-        if (!cursor) {
-          console.warn("[STATIC] Page ended without next cursor", {
-            page,
-            pageRows: observations.length,
-            pageSize: STATIC_CATCHUP_PAGE_SIZE,
-            extensionKeys: Object.keys(body?.extensions ?? {}),
-            pagination: body?.extensions?.pagination,
-          });
-        }
-
-        logMeasurement({
-          stage: "t6",
-          event: "static_catchup_page",
-          pod: source.value,
-          observations: counters.observationsBySource.get(source.value) ?? 0,
-          source: source.value,
-          reconnect_attempt: reconnectAttempt,
-          page,
-          page_rows: observations.length,
-          replay_rows: replay.seen.size,
-          has_next: Boolean(cursor),
-        });
-      } while (cursor);
-
-      await reconcileReplay(replay);
-      logMeasurement({
-        stage: "t6",
-        event: "static_catchup_completed",
-        pod: source.value,
-        observations: counters.observationsBySource.get(source.value) ?? 0,
-        source: source.value,
-        reconnect_attempt: reconnectAttempt,
-        pages: page,
-        replay_rows: copyReplaySnapshot(replay.seen).rows,
-        view_unique: view.size,
-        view_rows: viewRowCount(view),
-        total_adds: counters.totalAdds,
-        total_removes: counters.totalRemoves,
-        source_resets: counters.sourceResets,
-      });
-      return true;
-    } catch (err) {
-      console.error(`[STATIC] Catch-up failed for ${source.value}:`, err);
-      logMeasurement({
-        stage: "t6",
-        event: "static_catchup_error",
-        pod: source.value,
-        observations: counters.observationsBySource.get(source.value) ?? 0,
-        source: source.value,
-        reconnect_attempt: reconnectAttempt,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    } finally {
-      staticCatchupsInFlight.delete(source.value);
-    }
-  };
-
   const retryDelay = (attempt: number) => Math.min(
     STREAM_RECONNECT_INITIAL_DELAY_MS * Math.pow(STREAM_RECONNECT_BACKOFF_FACTOR, attempt - 1),
     STREAM_RECONNECT_MAX_DELAY_MS,
   );
 
-  const runInitialStaticCatchup = async (source: typeof sources[number]) => {
-    let attempt = 0;
-    while (!await runStaticCatchup(source, attempt)) {
-      attempt++;
-      const delay = retryDelay(attempt);
-      console.warn(`[STATIC] Retrying initial catch-up for ${source.value} in ${delay}ms (attempt ${attempt})`);
-      logMeasurement({
-        stage: "t6",
-        event: "static_catchup_retry_scheduled",
-        pod: source.value,
-        observations: counters.observationsBySource.get(source.value) ?? 0,
-        source: source.value,
-        reconnect_attempt: attempt,
-        retry_delay_ms: delay,
-      });
-      await sleep(delay);
-    }
-  };
-
   const handleBinding = async (b: any, source?: string, replay?: ReplayState) => {
-    const { key, stable } = materializedBindingKey(b, source);
+    const key = b.toString();
     const addition = isAddition(b);
     const activeReplay = replay && !replay.settled && !replay.closed ? replay : undefined;
 
@@ -534,41 +272,18 @@ export async function querySources(
         const sourceCount = contributions?.get(key) ?? 0;
 
         if (activeReplay) {
-          activeReplay.seen.set(key, stable ? 1 : (activeReplay.seen.get(key) ?? 0) + 1);
+          activeReplay.seen.set(key, (activeReplay.seen.get(key) ?? 0) + 1);
           activeReplay.bindings.set(key, b);
-          if (stable) {
-            activeReplay.stableKeys.add(key);
-          }
           if (DEBUG_VIEW_EVENTS) {
             console.log(`[VIEW] Buffered reconnect replay row for ${source}`);
           }
           return;
         }
 
-        if (stable && sourceCount > 0) {
-          const entry = view.get(key);
-          if (entry) {
-            entry.bindings = b;
-            entry.count = 1;
-          }
-          if (contributions && source) {
-            contributions.set(key, 1);
-            sourceContributions.set(source, contributions);
-          }
-          if (DEBUG_VIEW_EVENTS) {
-            console.log(`[VIEW] Ignored duplicate stable add for ${source}`);
-          }
-          return;
-        }
-
         if (view.has(key)) {
           const entry = view.get(key)!;
-          if (stable) {
-            entry.bindings = b;
-            entry.count = 1;
-          } else {
-            entry.count++;
-          }
+          entry.bindings = b;
+          entry.count++;
           if (DEBUG_VIEW_EVENTS) {
             console.log(`[VIEW] Incremented count (${entry.count}) for key`);
           }
@@ -580,7 +295,7 @@ export async function querySources(
         }
 
         if (source && contributions) {
-          contributions.set(key, stable ? 1 : sourceCount + 1);
+          contributions.set(key, sourceCount + 1);
           sourceContributions.set(source, contributions);
         }
         counters.totalAdds++;
@@ -591,13 +306,6 @@ export async function querySources(
         emitViewUpdate(source);
       });
     } else {
-      if (staticCatchupPlan && source && !activeReplay) {
-        if (DEBUG_VIEW_EVENTS) {
-          console.log(`[VIEW] Ignored live stream removal for ${source}; static catch-up owns snapshot reconciliation`);
-        }
-        return;
-      }
-
       await mutex.runExclusive(() => {
         if (view.has(key)) {
           const removed = source ? removeSourceContribution(source, key, 1) : 0;
@@ -632,13 +340,12 @@ export async function querySources(
   const startSource = async (source: typeof sources[number], reconnectAttempt = 0): Promise<void> => {
     console.log(`[QUERY] Executing query for source: ${source.value}`);
 
-    const replay: ReplayState | undefined = reconnectAttempt > 0 && !staticCatchupPlan
+    const replay: ReplayState | undefined = reconnectAttempt > 0
       ? {
         source: source.value,
         reconnectAttempt,
         seen: new Map(),
         bindings: new Map(),
-        stableKeys: new Set(),
         settled: false,
         closed: false,
       }
@@ -763,10 +470,6 @@ export async function querySources(
     }, delay);
   };
 
-  if (staticCatchupPlan) {
-    await Promise.all(sources.map(runInitialStaticCatchup));
-  }
-
   await Promise.all(sources.map(source => startSource(source)));
 }
 
@@ -819,125 +522,6 @@ export function materializedViewToSparqlJson(view: Map<string,{bindings: any, co
     head: { vars: [...variablesSet.keys()] },
     results: { bindings: results },
   };
-}
-
-function buildObservationStaticCatchupPlan(
-  sparqlQuery: string,
-  context: Record<string, string>,
-): ObservationStaticCatchupPlan | undefined {
-  if (/\bGROUP\s+BY\b/iu.test(sparqlQuery)) return undefined;
-  if (!/\bsaref:Observation\b|\bsaref_Observation\b/iu.test(sparqlQuery) && !/\bsaref:observes\b/iu.test(sparqlQuery)) {
-    return undefined;
-  }
-
-  const observesMatch = sparqlQuery.match(/\bsaref:observes\s+([^\s;]+)\s*;/iu);
-  if (!observesMatch?.[1]) return undefined;
-
-  const metricToken = observesMatch[1].trim();
-  const metricIri = expandIriToken(metricToken, context);
-  const graphqlFilterValue = compactIriForGraphqlFilter(metricIri, context) ?? metricToken;
-
-  return {
-    metricToken,
-    metricIri,
-    graphqlFilterValue,
-  };
-}
-
-function buildObservationStaticCatchupQuery(
-  plan: ObservationStaticCatchupPlan,
-  cursor?: string,
-): string {
-  const args = [`pageSize: ${STATIC_CATCHUP_PAGE_SIZE}`];
-  if (cursor) {
-    args.push(`cursor: ${JSON.stringify(cursor)}`);
-  }
-
-  return `
-query {
-  saref_Observation(${args.join(", ")}) {
-    id
-    saref_hasTimestamp
-    saref_hasValue
-    void_inDataset
-    saref_observes @filter(if: "it==${plan.graphqlFilterValue}")
-  }
-}
-`;
-}
-
-function expandIriToken(token: string, context: Record<string, string>): string {
-  if (token.startsWith("<") && token.endsWith(">")) {
-    return token.slice(1, -1);
-  }
-
-  const [prefix, ...localParts] = token.split(":");
-  const local = localParts.join(":");
-  if (prefix && local && context[prefix]) {
-    return `${context[prefix]}${local}`;
-  }
-
-  return token;
-}
-
-function compactIriForGraphqlFilter(iri: string, context: Record<string, string>): string | undefined {
-  for (const [prefix, namespace] of Object.entries(context)) {
-    if (iri.startsWith(namespace)) {
-      return `${prefix}:${iri.slice(namespace.length)}`;
-    }
-  }
-
-  return undefined;
-}
-
-function observationMatchesMetric(observation: any, plan: ObservationStaticCatchupPlan): boolean {
-  const observes = Array.isArray(observation?.saref_observes)
-    ? observation.saref_observes
-    : observation?.saref_observes
-      ? [observation.saref_observes]
-      : [];
-
-  return observes.some((value: unknown) => value === plan.metricIri || value === plan.graphqlFilterValue || value === plan.metricToken);
-}
-
-function observationToBinding(observation: any): Map<{ value: string }, any> {
-  const dataset = firstValue(observation?.void_inDataset);
-  const binding = new Map<{ value: string }, any>();
-
-  binding.set({ value: "id" }, namedNode(String(observation.id)));
-  binding.set({ value: "dataset" }, namedNode(String(dataset ?? "")));
-  binding.set({ value: "timestamp" }, literal(String(observation.saref_hasTimestamp ?? ""), XSD_DATE_TIME));
-  binding.set({ value: "value" }, literal(String(observation.saref_hasValue ?? ""), XSD_STRING));
-
-  return binding;
-}
-
-function firstValue(value: unknown): unknown {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function namedNode(value: string) {
-  return {
-    termType: "NamedNode",
-    value,
-  };
-}
-
-function literal(value: string, datatype: string) {
-  return {
-    termType: "Literal",
-    value,
-    datatype: namedNode(datatype),
-    language: "",
-  };
-}
-
-function findNextCursor(pagination: unknown): string | undefined {
-  if (!Array.isArray(pagination)) return undefined;
-
-  const rootPage = pagination.find((page: GraphQLPaginationInfo) => page?.path === "/saref_Observation");
-  const candidate = rootPage ?? pagination.find((page: GraphQLPaginationInfo) => typeof page?.next === "string");
-  return typeof candidate?.next === "string" ? candidate.next : undefined;
 }
 
 // Retry configuration for transient UMA/proxy errors
