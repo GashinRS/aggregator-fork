@@ -270,8 +270,8 @@ function readOptions(): Options {
     throw new Error("--result-mode must be either poll or snapshot-and-stream");
   }
   const resultPageSize = Number(getArg("--result-page-size") ?? "25000");
-  if (!Number.isInteger(resultPageSize) || resultPageSize < 1 || resultPageSize > 50_000) {
-    throw new Error("--result-page-size must be an integer between 1 and 50000");
+  if (!Number.isInteger(resultPageSize) || resultPageSize < 1 || resultPageSize > 500_000) {
+    throw new Error("--result-page-size must be an integer between 1 and 500000");
   }
 
   return {
