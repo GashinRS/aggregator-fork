@@ -12,6 +12,7 @@ const STREAM_RECONNECT_INITIAL_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_
 const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_DELAY_MS || "30000", 10);
 const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_BACKOFF_FACTOR || "2");
 const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || "30000", 10);
+const INITIAL_VIEW_SETTLE_MS = parseInt(process.env.INITIAL_VIEW_SETTLE_MS || "30000", 10);
 
 const streamingDispatcher = new Agent({
   bodyTimeout: 0,
@@ -60,29 +61,52 @@ export async function querySources(
   const sourceContributions = new Map<string, Map<string, number>>();
   const normalizedEndpoints = new Set(endpoints.map(endpoint => endpoint.replace(/\/+$/u, "")));
   const readyEndpoints = new Set<string>();
-  let initialBoundaryScheduled = false;
+  let initialBoundaryComplete = false;
+  let initialBoundaryTimer: ReturnType<typeof setTimeout> | undefined;
+  let initialBoundaryGeneration = 0;
 
   const scheduleInitialBoundary = () => {
     if (
-      initialBoundaryScheduled ||
+      initialBoundaryComplete ||
       readyEndpoints.size !== normalizedEndpoints.size
     ) {
       return;
     }
-    initialBoundaryScheduled = true;
 
-    // Initial bindings are applied through the same mutex. Queueing the ready
-    // marker on that mutex ensures every already-delivered initial binding is
-    // visible before snapshot requests are admitted.
-    void mutex.runExclusive(() => {
-      onInitialQueryReady?.();
-    });
+    if (initialBoundaryTimer) {
+      clearTimeout(initialBoundaryTimer);
+    }
+
+    const generation = ++initialBoundaryGeneration;
+    initialBoundaryTimer = setTimeout(() => {
+      initialBoundaryTimer = undefined;
+
+      // Binding handlers use the same mutex. If bindings were already queued
+      // when this timer fired, the boundary waits behind them. A binding that
+      // arrives while it is waiting increments the generation, invalidating
+      // this callback and starting a new quiet-period timer.
+      void mutex.runExclusive(() => {
+        if (
+          initialBoundaryComplete ||
+          generation !== initialBoundaryGeneration
+        ) {
+          return;
+        }
+
+        initialBoundaryComplete = true;
+        console.log(
+          `[QUERY] Initial bindings settled after ${INITIAL_VIEW_SETTLE_MS}ms without an update`,
+        );
+        onInitialQueryReady?.();
+      });
+    }, Math.max(0, INITIAL_VIEW_SETTLE_MS));
   };
 
-  // Incremunica executes the paginated static query first and only opens its
-  // GraphQL subscription after the last static page. Observing the first
-  // successful SSE request for every endpoint therefore gives us an exact
-  // boundary between initial materialization and later live additions.
+  // Incremunica opens its GraphQL subscription after fetching the static
+  // pages, but it can still have a large number of static bindings queued in
+  // its local result pipeline at that point. The SSE request is therefore the
+  // start of the readiness settlement period, not the readiness boundary
+  // itself. Every subsequently processed binding restarts the timer below.
   const queryFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const response = await umaProxyFetch(input, init);
     if (response.ok && isSseInit(init)) {
@@ -481,6 +505,7 @@ export async function querySources(
 
     bindingsStream.on('data', (binding) => {
       void handleBinding(binding, source.value, replay).then(() => {
+        scheduleInitialBoundary();
         scheduleReplaySettle();
       });
     });

@@ -97,6 +97,7 @@ The generated container accepts these environment variables:
 | `RESULT_MAX_SNAPSHOTS` | `2` | Concurrent retained snapshots |
 | `RESULT_REPLAY_LIMIT` | `2000000` | Retained addition events |
 | `RESULT_HEARTBEAT_MS` | `15000` | SSE heartbeat interval |
+| `INITIAL_VIEW_SETTLE_MS` | `30000` | Quiet period after all source subscriptions open before the initial view is declared ready |
 
 The aggregator proxy preserves the query string and flushes SSE chunks
 immediately. UMA clients cache one RPT per HTTP method and protected resource
