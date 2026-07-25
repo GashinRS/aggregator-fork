@@ -11,10 +11,21 @@ configured Kvasir source. It opens the Kvasir subscription only after the last
 static page has been consumed. The generated service uses the first successful
 subscription request for every source as its readiness signal.
 
-Before that boundary, result requests return `503 Service Unavailable` with a
-`Retry-After: 2` header. Initial bindings are placed in the snapshot and are not
-published as live additions. After readiness, every addition receives a
-monotonically increasing service-local sequence number.
+Before that boundary, result requests return `503 Service Unavailable`.
+Clients avoid repeatedly requesting the result by checking the constant-size
+readiness document:
+
+```http
+GET /<aggregator-id>/<service>/<output>?mode=status
+Accept: application/json
+```
+
+While the view is being constructed it returns
+`{"ready":false,"rows":null,"sequence":0}`. Once `ready` becomes `true`, the
+client requests the first snapshot page. The readiness handler does not iterate
+or serialize the materialized view. Initial bindings are placed in the
+snapshot and are not published as live additions. After readiness, every
+addition receives a monotonically increasing service-local sequence number.
 
 ## Initial snapshot
 
@@ -80,11 +91,11 @@ The generated container accepts these environment variables:
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `RESULT_PAGE_SIZE` | `25000` | Default snapshot page size |
-| `RESULT_MAX_PAGE_SIZE` | `50000` | Maximum accepted page size |
+| `RESULT_PAGE_SIZE` | `100000` | Default snapshot page size |
+| `RESULT_MAX_PAGE_SIZE` | `500000` | Maximum accepted page size |
 | `RESULT_SNAPSHOT_TTL_MS` | `300000` | Snapshot idle timeout |
-| `RESULT_MAX_SNAPSHOTS` | `4` | Concurrent retained snapshots |
-| `RESULT_REPLAY_LIMIT` | `100000` | Retained addition events |
+| `RESULT_MAX_SNAPSHOTS` | `2` | Concurrent retained snapshots |
+| `RESULT_REPLAY_LIMIT` | `2000000` | Retained addition events |
 | `RESULT_HEARTBEAT_MS` | `15000` | SSE heartbeat interval |
 
 The aggregator proxy preserves the query string and flushes SSE chunks
@@ -92,8 +103,10 @@ immediately. UMA clients cache one RPT per HTTP method and protected resource
 path, so page cursors and SSE reconnect parameters do not cause a new ticket
 exchange for every request.
 
-The automation defaults to `result_mode: snapshot-and-stream`. Its
-`result_page_size` controls snapshot pages, while `poll_interval` controls how
-often cumulative stream summaries are written. The dashboard follows the same
-snapshot-and-stream protocol and keeps only a bounded recent sample window in
-browser memory.
+The automation defaults to `result_mode: snapshot-and-stream`. It polls only
+the readiness document while the initial view is loading, at the configured
+`poll_interval` bounded to 5--30 seconds. Its `result_page_size` controls
+snapshot pages, while `poll_interval` also controls how often cumulative stream
+summaries are written. The dashboard checks readiness every five seconds. It
+then follows the same snapshot-and-stream protocol and keeps only a bounded
+recent sample window in browser memory.

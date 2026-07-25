@@ -5,11 +5,11 @@ import { logMeasurement, viewRowCount } from "./measurement.js";
 import { AdditionEvent, LiveResultError, LiveResultStore } from "./live-results.js";
 import type { ServerResponse } from "node:http";
 
-const DEFAULT_RESULT_PAGE_SIZE = parseInt(process.env.RESULT_PAGE_SIZE || "25000", 10);
+const DEFAULT_RESULT_PAGE_SIZE = parseInt(process.env.RESULT_PAGE_SIZE || "100000", 10);
 const MAX_RESULT_PAGE_SIZE = parseInt(process.env.RESULT_MAX_PAGE_SIZE || "500000", 10);
 const RESULT_SNAPSHOT_TTL_MS = parseInt(process.env.RESULT_SNAPSHOT_TTL_MS || "300000", 10);
-const RESULT_MAX_SNAPSHOTS = parseInt(process.env.RESULT_MAX_SNAPSHOTS || "4", 10);
-const RESULT_REPLAY_LIMIT = parseInt(process.env.RESULT_REPLAY_LIMIT || "100000", 10);
+const RESULT_MAX_SNAPSHOTS = parseInt(process.env.RESULT_MAX_SNAPSHOTS || "2", 10);
+const RESULT_REPLAY_LIMIT = parseInt(process.env.RESULT_REPLAY_LIMIT || "2000000", 10);
 const RESULT_HEARTBEAT_MS = parseInt(process.env.RESULT_HEARTBEAT_MS || "15000", 10);
 
 function parsePageSize(value: unknown): number {

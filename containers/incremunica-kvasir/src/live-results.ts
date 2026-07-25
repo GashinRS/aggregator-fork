@@ -129,9 +129,9 @@ export class LiveResultStore {
   private nextSubscriber = 1;
 
   constructor(
-    private readonly replayLimit = 100_000,
+    private readonly replayLimit = 2_000_000,
     private readonly snapshotTtlMs = 5 * 60_000,
-    private readonly maxSnapshots = 4,
+    private readonly maxSnapshots = 2,
   ) {}
 
   currentSequence(): number {
