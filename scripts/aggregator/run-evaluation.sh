@@ -15,6 +15,7 @@ DURATION="20m"
 MEASUREMENT_LOG_INTERVAL_MS="5000"
 RESULT_MODE="snapshot-and-stream"
 RESULT_PAGE_SIZE="100000"
+LATEST_TIMESTAMP="false"
 CLEANUP_AFTER="false"
 UPLOAD_CMD=""
 GENERATED_SELECTOR=""
@@ -40,6 +41,7 @@ Optional:
   --measurement-log-interval-ms 5000  # default; 0 logs every view update
   --result-mode snapshot-and-stream   # or poll for the legacy full-page poller
   --result-page-size 25000
+  --latest-timestamp false            # true also logs the newest saref:hasTimestamp seen
   --upload-cmd "bash /path/to/uploader.sh"
   --cleanup-after
 
@@ -70,6 +72,7 @@ while [[ $# -gt 0 ]]; do
     --measurement-log-interval-ms) MEASUREMENT_LOG_INTERVAL_MS="$2"; shift 2 ;;
     --result-mode) RESULT_MODE="$2"; shift 2 ;;
     --result-page-size) RESULT_PAGE_SIZE="$2"; shift 2 ;;
+    --latest-timestamp) LATEST_TIMESTAMP="$2"; shift 2 ;;
     --upload-cmd) UPLOAD_CMD="$2"; shift 2 ;;
     --cleanup-after) CLEANUP_AFTER="true"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -98,6 +101,10 @@ fi
 if [[ ! "$RESULT_PAGE_SIZE" =~ ^[0-9]+$ ]] ||
    (( RESULT_PAGE_SIZE < 1 || RESULT_PAGE_SIZE > 500000 )); then
   echo "--result-page-size must be an integer between 1 and 500000" >&2
+  exit 1
+fi
+if [[ "$LATEST_TIMESTAMP" != "true" && "$LATEST_TIMESTAMP" != "false" ]]; then
+  echo "--latest-timestamp must be true or false" >&2
   exit 1
 fi
 
@@ -216,6 +223,7 @@ cat > "$RUN_DIR/metadata.json" <<EOF
   "result_mode": "$RESULT_MODE",
   "result_page_size": $RESULT_PAGE_SIZE,
   "measurement_log_interval_ms": "$MEASUREMENT_LOG_INTERVAL_MS",
+  "latest_timestamp": $LATEST_TIMESTAMP,
   "started_at": "$(date -u +%FT%TZ)"
 }
 EOF
@@ -287,6 +295,9 @@ echo "[$(date -u +%FT%TZ)] Starting poller"
     --out "$RUN_DIR/poll-results.jsonl"
     --ready-file "$RESULT_READY_FILE"
   )
+  if [[ "$LATEST_TIMESTAMP" == "true" ]]; then
+    POLL_ARGS+=(--latest-timestamp)
+  fi
   if [[ -n "$AGGREGATOR_SERVER" ]]; then
     POLL_ARGS+=(--aggregator-server "$AGGREGATOR_SERVER")
   fi

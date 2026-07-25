@@ -60,6 +60,7 @@ interface Options {
   readyFile?: string;
   resultMode: "poll" | "snapshot-and-stream";
   resultPageSize: number;
+  latestTimestamp: boolean;
 }
 
 function getArg(name: string): string | undefined {
@@ -159,7 +160,88 @@ function datasetValue(row: SparqlResultRow): string | undefined {
   return undefined;
 }
 
-function parseObservationCounts(body: string): { total: number | null; byPod: Map<string, number> } {
+/**
+ * Extracts the observation's saref:hasTimestamp from a result row.
+ *
+ * The generated metric queries bind it as ?timestamp, but the projection is
+ * schema-driven, so fall back to the SPARQL-mangled predicate names and finally
+ * to any variable whose name mentions a timestamp.
+ */
+function timestampValue(row: SparqlResultRow): string | undefined {
+  const exactBinding = row.timestamp ?? row.hasTimestamp ?? row.saref_hasTimestamp;
+  if (typeof exactBinding?.value === "string" && exactBinding.value) {
+    return exactBinding.value;
+  }
+
+  for (const [key, binding] of Object.entries(row)) {
+    if (key.toLowerCase().includes("timestamp") && typeof binding?.value === "string" && binding.value) {
+      return binding.value;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Tracks the newest observation timestamp seen so far, overall and per pod.
+ *
+ * Row counts alone cannot distinguish "the aggregator is missing data" from
+ * "the aggregator is behind": both look like a shortfall. The newest
+ * saref:hasTimestamp in the materialised view says how far through the replayed
+ * stream the aggregator has actually got, so the two can be told apart.
+ *
+ * Comparison is on parsed epoch milliseconds rather than on the raw string,
+ * because xsd:dateTime literals may differ in fractional-second precision or
+ * timezone offset even when they are directly comparable as instants.
+ *
+ * Opt-in via --latest-timestamp. When disabled the tracker is inert: no
+ * timestamp is extracted per row and no `latest_timestamp` field is emitted, so
+ * both the per-row work and the log schema stay exactly as they were.
+ */
+class LatestTimestamps {
+  private overallIso: string | null = null;
+  private overallMs = Number.NEGATIVE_INFINITY;
+  private readonly byPod = new Map<string, { iso: string; ms: number }>();
+
+  constructor(private readonly enabled: boolean) {}
+
+  get active(): boolean {
+    return this.enabled;
+  }
+
+  observe(pod: string, raw: string | undefined): void {
+    if (!this.enabled || !raw) return;
+    const ms = Date.parse(raw);
+    if (!Number.isFinite(ms)) return;
+
+    if (ms > this.overallMs) {
+      this.overallMs = ms;
+      this.overallIso = raw;
+    }
+
+    const current = this.byPod.get(pod);
+    if (!current || ms > current.ms) {
+      this.byPod.set(pod, { iso: raw, ms });
+    }
+  }
+
+  /** Log fields for the aggregate record; empty when the option is off. */
+  fields(): Record<string, unknown> {
+    return this.enabled ? { latest_timestamp: this.overallIso } : {};
+  }
+
+  /** Log fields for one pod's record; empty when the option is off. */
+  fieldsForPod(pod: string): Record<string, unknown> {
+    return this.enabled
+      ? { latest_timestamp: this.byPod.get(pod)?.iso ?? null }
+      : {};
+  }
+}
+
+function parseObservationCounts(
+  body: string,
+  latest?: LatestTimestamps,
+): { total: number | null; byPod: Map<string, number> } {
   const byPod = new Map<string, number>();
 
   try {
@@ -172,6 +254,9 @@ function parseObservationCounts(body: string): { total: number | null; byPod: Ma
 
       const pod = datasetValue(row as SparqlResultRow) ?? "unknown";
       byPod.set(pod, (byPod.get(pod) ?? 0) + 1);
+      if (latest?.active) {
+        latest.observe(pod, timestampValue(row as SparqlResultRow));
+      }
     }
 
     return { total: rows.length, byPod };
@@ -291,6 +376,7 @@ function readOptions(): Options {
     readyFile: getArg("--ready-file"),
     resultMode,
     resultPageSize,
+    latestTimestamp: hasArg("--latest-timestamp"),
   };
 }
 
@@ -364,6 +450,7 @@ async function pollEndpoint(
   endpoint: string,
   poll: number,
   roundStartedAt: string,
+  latest: LatestTimestamps,
 ) {
   const requestStartedAt = new Date().toISOString();
   const started = performance.now();
@@ -391,7 +478,7 @@ async function pollEndpoint(
 
     if (!opts.description) {
       const parseStarted = performance.now();
-      const observationCounts = parseObservationCounts(body);
+      const observationCounts = parseObservationCounts(body, latest);
       rows = observationCounts.total ?? parseRowCount(body);
       observationsByPod = observationCounts.byPod;
       jsonParseMs = Math.round((performance.now() - parseStarted) * 1000) / 1000;
@@ -431,6 +518,7 @@ async function pollEndpoint(
         pod,
         patient: pod,
         observations,
+        ...latest.fieldsForPod(pod),
       });
     }
   } else {
@@ -439,6 +527,7 @@ async function pollEndpoint(
       pod: opts.description ? endpoint : "all",
       patient: opts.description ? endpoint : "all",
       observations: rows ?? 0,
+      ...latest.fields(),
     });
   }
 }
@@ -450,6 +539,7 @@ async function fetchInitialSnapshot(
   outputName: string,
   endpoint: string,
   readyDeadline: number = Date.now() + 10 * 60_000,
+  latest: LatestTimestamps = new LatestTimestamps(opts.latestTimestamp),
 ): Promise<{
   sequence: number;
   rows: number;
@@ -494,7 +584,7 @@ async function fetchInitialSnapshot(
 
     const parseStarted = performance.now();
     const parsed = JSON.parse(body);
-    const pageCounts = parseObservationCounts(body);
+    const pageCounts = parseObservationCounts(body, latest);
     jsonParseMs += performance.now() - parseStarted;
     if (pageCounts.total === null) {
       throw new Error("Snapshot page was not a SPARQL JSON result");
@@ -544,12 +634,24 @@ async function fetchInitialSnapshot(
   };
   if (byPod.size > 0) {
     for (const [pod, observations] of byPod) {
-      logMeasurement(opts, { ...common, pod, patient: pod, observations });
+      logMeasurement(opts, {
+        ...common,
+        pod,
+        patient: pod,
+        observations,
+        ...latest.fieldsForPod(pod),
+      });
     }
   }
   // Keep an explicit aggregate as the final record for this timestamp. The
   // verifier uses it when one service combines several patient sources.
-  logMeasurement(opts, { ...common, pod: "all", patient: "all", observations: rows });
+  logMeasurement(opts, {
+    ...common,
+    pod: "all",
+    patient: "all",
+    observations: rows,
+    ...latest.fields(),
+  });
 
   return { sequence: sequence!, rows, byPod, snapshot };
 }
@@ -565,6 +667,7 @@ function logStreamSummary(
     byPod: Map<string, number>;
     sequence: number;
     reconnects: number;
+    latest: LatestTimestamps;
     event: "stream_summary" | "stream_finished";
   },
 ): void {
@@ -588,7 +691,13 @@ function logStreamSummary(
   };
   if (details.byPod.size > 0) {
     for (const [pod, observations] of details.byPod) {
-      logMeasurement(opts, { ...common, pod, patient: pod, observations });
+      logMeasurement(opts, {
+        ...common,
+        pod,
+        patient: pod,
+        observations,
+        ...details.latest.fieldsForPod(pod),
+      });
     }
   }
   logMeasurement(opts, {
@@ -596,6 +705,7 @@ function logStreamSummary(
     pod: "all",
     patient: "all",
     observations: details.snapshotRows + details.newRows,
+    ...details.latest.fields(),
   });
 }
 
@@ -608,6 +718,10 @@ async function runSnapshotAndStream(
   stopAt: number,
   onSnapshotReady?: () => void,
 ): Promise<void> {
+  // One tracker for the whole service: seeded by the paginated snapshot, then
+  // advanced by every live addition, so it always reflects the newest
+  // observation this service has ever surfaced.
+  const latest = new LatestTimestamps(opts.latestTimestamp);
   const snapshot = await fetchInitialSnapshot(
     umaFetch,
     opts,
@@ -615,6 +729,7 @@ async function runSnapshotAndStream(
     outputName,
     endpoint,
     stopAt,
+    latest,
   );
   const totalsByPod = new Map(snapshot.byPod);
   let sequence = snapshot.sequence;
@@ -674,6 +789,7 @@ async function runSnapshotAndStream(
             newRows += count;
             const pod = datasetValue(addition.binding) ?? "unknown";
             totalsByPod.set(pod, (totalsByPod.get(pod) ?? 0) + count);
+            latest.observe(pod, timestampValue(addition.binding));
           } else if (message.event === "replay-complete" && !snapshotReadySignalled) {
             // Every replayed addition is ordered before this marker. Persist the
             // caught-up view as the authoritative pre-stream baseline before the
@@ -687,6 +803,7 @@ async function runSnapshotAndStream(
               byPod: totalsByPod,
               sequence,
               reconnects,
+              latest,
               event: "stream_summary",
             });
             lastSummaryAt = Date.now();
@@ -705,6 +822,7 @@ async function runSnapshotAndStream(
             byPod: totalsByPod,
             sequence,
             reconnects,
+            latest,
             event: "stream_summary",
           });
           lastSummaryAt = Date.now();
@@ -733,6 +851,7 @@ async function runSnapshotAndStream(
     byPod: totalsByPod,
     sequence,
     reconnects,
+    latest,
     event: "stream_finished",
   });
 }
@@ -761,6 +880,7 @@ async function main() {
   if (!opts.description) console.error(`Polling outputs: ${opts.outputNames.join(", ")}`);
   console.error(`Interval: ${opts.intervalMs}ms`);
   console.error(`Result mode: ${opts.description ? "description-poll" : opts.resultMode}`);
+  console.error(`Latest-observation timestamp logging: ${opts.latestTimestamp ? "on" : "off"}`);
 
   if (!opts.description && opts.resultMode === "snapshot-and-stream") {
     const stopAt = opts.durationMs > 0 ? Date.now() + opts.durationMs : Number.POSITIVE_INFINITY;
@@ -807,6 +927,20 @@ async function main() {
   }
 
   let poll = 0;
+  // Each poll re-reads the whole result, so its own body already carries the
+  // newest timestamp. Keeping one tracker per endpoint across polls means the
+  // reported value stays monotonic even if an individual poll fails or the
+  // aggregator briefly serves a truncated page.
+  const latestByEndpoint = new Map<string, LatestTimestamps>();
+  const latestFor = (endpoint: string): LatestTimestamps => {
+    let tracker = latestByEndpoint.get(endpoint);
+    if (!tracker) {
+      tracker = new LatestTimestamps(opts.latestTimestamp);
+      latestByEndpoint.set(endpoint, tracker);
+    }
+    return tracker;
+  };
+
   while (poll < opts.count && Date.now() <= stopAt) {
     poll++;
     const roundStartedAt = new Date().toISOString();
@@ -818,9 +952,26 @@ async function main() {
       const endpoint = opts.description ? serviceEndpoint : outputEndpoint;
 
       if (!opts.description && opts.resultMode === "poll") {
-        return fetchInitialSnapshot(umaFetch, opts, svcName, outputName, endpoint);
+        return fetchInitialSnapshot(
+          umaFetch,
+          opts,
+          svcName,
+          outputName,
+          endpoint,
+          undefined,
+          latestFor(endpoint),
+        );
       }
-      return pollEndpoint(umaFetch, opts, svcName, outputName, endpoint, poll, roundStartedAt);
+      return pollEndpoint(
+        umaFetch,
+        opts,
+        svcName,
+        outputName,
+        endpoint,
+        poll,
+        roundStartedAt,
+        latestFor(endpoint),
+      );
     }));
 
     if (
