@@ -17,24 +17,23 @@ type UserCredentials = {
 const umaIdCache = new Map<UserKey, string>();
 const KVASIR_CLIENT_SOURCES = kvasirPatientSources();
 const numberedPatients = Array.from({ length: 30 }, (_, index) => `patient${index + 1}`);
-const evalLowPatients = Array.from({ length: 30 }, (_, index) => `eval-low${index + 1}`);
-const evalMediumPatients = Array.from({ length: 15 }, (_, index) => `eval-medium${index + 1}`);
+const phigh = Array.from({ length: 31 }, (_, index) => `p${index + 1}high`);
+const pmed = Array.from({ length: 31 }, (_, index) => `p${index + 1}med`);
+const plow = Array.from({ length: 31 }, (_, index) => `p${index + 1}low`);
 
 // Map each aggregator owner to the patients whose slice data they need to query.
 // Add another owner here if needed; the patient list itself is generated.
 const AGGREGATOR_OWNER_PATIENTS: Record<UserKey, UserKey[]> = {
-  //patient1: ['patient1,patient3,patient4,patient5,patient6,patient7,patient8,patient9,patient10,patient11,patient12,patient13,patient14,patient15,patient16,patient17,patient18,patient19,patient20,patient21,patient22,patient23,patient24,patient25,patient26,patient27,patient28,patient29,patient30,patient31'],
   //patient15: numberedPatients,
   //"eval-low1": evalLowPatients,
   //"eval-low1": ['eval-low8,eval-low9,eval-low10,eval-low11'],
   //"eval-low12": ['eval-low12,eval-low13']
   // "eval-medium1": evalMediumPatients,
   //"teststream": ['teststream,teststream5'],
-  // "rorii6": ['rorii6,rorii7'],
   // "patient1": ['patient1']
-  // "kronky4": ['kronky4,kronky5,kronky6']
   // "eval-low2": ['eval-low2']
-  "newtest17": ['newtest17']
+  // "p17med": ['p17med'],
+  "agg-owner": phigh
   // "eval-medium13": ['eval-medium13'],
 };
 
@@ -101,6 +100,12 @@ function sliceUrl(patient: UserKey): string {
 function policyName(owner: UserKey, patient: UserKey, endpoint: "Query" | "Changes"): string {
   const suffix = owner === patient ? "Owner" : "AggregatorOwner";
   return `${config.sliceName}_${patient}_${suffix}${endpoint}`.replace(/[^A-Za-z0-9_]/g, "_");
+}
+
+function policyId(owner: UserKey, patient: UserKey, endpoint: "Query" | "Changes"): string {
+  const ownerPart = encodeURIComponent(owner);
+  const patientPart = encodeURIComponent(patient);
+  return `http://example.com/pacsoi/uma-policy/${patientPart}/${ownerPart}/${endpoint.toLowerCase()}`;
 }
 
 function usesDefaultPatientPassword(user: UserKey): boolean {
@@ -181,27 +186,26 @@ async function setupPoliciesForPatient(owner: UserKey, patient: UserKey) {
   );
 
   console.log("-> Delegating pod access control to UMA");
-  await kvasir.delegatePodToUMA();
+  const delegationAction = await kvasir.ensurePodDelegatedToUMA();
+  console.log(`-> Kvasir UMA delegation: ${delegationAction}`);
 
   console.log(`-> Granting ${owner} ${scopes.join(",")} access to ${patient}'s slice query endpoints`);
-  const { turtle } = await createPolicies([
-    {
-      name: policyName(owner, patient, "Query"),
-      assignee: ownerUmaId,
-      assigner: patientUmaId,
-      target: `${patientSliceUrl}/query`,
-      scopes,
-    },
-    {
-      name: policyName(owner, patient, "Changes"),
-      assignee: ownerUmaId,
-      assigner: patientUmaId,
-      target: `${patientSliceUrl}/changes`,
-      scopes,
-    },
-  ]);
+  for (const endpoint of ["Query", "Changes"] as const) {
+    const id = policyId(owner, patient, endpoint);
+    const { turtle } = await createPolicies([
+      {
+        id,
+        name: policyName(owner, patient, endpoint),
+        assignee: ownerUmaId,
+        assigner: patientUmaId,
+        target: `${patientSliceUrl}/${endpoint.toLowerCase()}`,
+        scopes,
+      },
+    ]);
 
-  await kvasir.registerPolicies(turtle);
+    const action = await kvasir.upsertPolicy(id, turtle);
+    console.log(`-> UMA ${endpoint.toLowerCase()} policy ${action}: ${id}`);
+  }
 }
 
 async function main() {
