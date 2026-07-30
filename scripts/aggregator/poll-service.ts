@@ -397,6 +397,40 @@ function outputForService(opts: Options, index: number): string {
   return opts.outputNames[index] ?? opts.outputNames[0];
 }
 
+const TRANSIENT_READINESS_STATUSES = new Set([502, 503, 504]);
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+function errorCode(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth++) {
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (typeof candidate.code === "string") return candidate.code;
+    current = candidate.cause;
+  }
+  return undefined;
+}
+
+function describeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = errorCode(error);
+  return code ? `${message} (${code})` : message;
+}
+
+function isTransientReadinessNetworkError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  const code = errorCode(error);
+  return code !== undefined && TRANSIENT_NETWORK_CODES.has(code);
+}
+
 async function waitForInitialViewReady(
   umaFetch: (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
   opts: Options,
@@ -408,26 +442,49 @@ async function waitForInitialViewReady(
   statusUrl.searchParams.set("mode", "status");
   const checkIntervalMs = Math.min(Math.max(opts.intervalMs, 5_000), 30_000);
   let announced = false;
+  let lastTransientFailure: string | undefined;
+  let lastLoggedTransientFailure: string | undefined;
 
   while (Date.now() < readyDeadline) {
-    const response = await umaFetch(statusUrl, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-    });
-    const body = await response.text();
-    if (!response.ok) {
-      throw new Error(
-        `Initial-view readiness check failed: ${response.status} ${body.slice(0, 500)}`,
-      );
+    try {
+      const response = await umaFetch(statusUrl, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      const body = await response.text();
+      if (!response.ok) {
+        if (!TRANSIENT_READINESS_STATUSES.has(response.status)) {
+          throw new Error(
+            `Initial-view readiness check failed: ${response.status} ${body.slice(0, 500)}`,
+          );
+        }
+        lastTransientFailure =
+          `HTTP ${response.status}${body ? `: ${body.slice(0, 200)}` : ""}`;
+      } else {
+        const status = JSON.parse(body) as { ready?: unknown };
+        if (status.ready === true) {
+          console.error(`Initial view for ${svcName} is ready; fetching snapshot`);
+          return;
+        }
+        if (status.ready !== false) {
+          throw new Error("Initial-view readiness response did not contain a boolean ready field");
+        }
+
+        lastTransientFailure = undefined;
+      }
+    } catch (error) {
+      if (!isTransientReadinessNetworkError(error)) throw error;
+      lastTransientFailure = `network error: ${describeError(error)}`;
     }
 
-    const status = JSON.parse(body) as { ready?: unknown };
-    if (status.ready === true) {
-      console.error(`Initial view for ${svcName} is ready; fetching snapshot`);
-      return;
-    }
-    if (status.ready !== false) {
-      throw new Error("Initial-view readiness response did not contain a boolean ready field");
+    if (
+      lastTransientFailure &&
+      lastTransientFailure !== lastLoggedTransientFailure
+    ) {
+      console.error(
+        `Transient readiness failure for ${svcName}; retrying: ${lastTransientFailure}`,
+      );
+      lastLoggedTransientFailure = lastTransientFailure;
     }
 
     if (!announced) {
@@ -439,7 +496,10 @@ async function waitForInitialViewReady(
     await sleep(Math.min(checkIntervalMs, Math.max(0, readyDeadline - Date.now())));
   }
 
-  throw new Error(`Timed out waiting for ${svcName}'s initial view`);
+  const suffix = lastTransientFailure
+    ? `; last transient failure: ${lastTransientFailure}`
+    : "";
+  throw new Error(`Timed out waiting for ${svcName}'s initial view${suffix}`);
 }
 
 async function pollEndpoint(
