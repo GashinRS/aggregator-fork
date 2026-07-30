@@ -4,6 +4,12 @@ import { DataFactory, Store, Writer } from "n3";
 const { namedNode, blankNode } = DataFactory;
 
 interface PolicyOptions {
+  /**
+   * Optional stable identifier for callers that need to update the same
+   * policy later. Callers that omit it retain the original random-ID
+   * behaviour.
+   */
+  id?: string;
   name: string;
   assignee: string;
   assigner: string;
@@ -44,11 +50,10 @@ export async function createPolicies(policies: PolicyOptions[]): Promise<{ turtl
 }
 
 export function createPolicy(store: Store, options: PolicyOptions): string {
-  const { name, assignee, assigner, scopes = ["read"], target, container, client } = options;
-  const uuid = randomUUID();
-  const baseIRI = `http://example.com/${uuid}#`;
+  const { id, name, assignee, assigner, scopes = ["read"], target, container, client } = options;
+  const baseIRI = id ? `${id}#` : `http://example.com/${randomUUID()}#`;
 
-  const policyNode = namedNode(`${baseIRI}${name}Policy`);
+  const policyNode = namedNode(id ?? `${baseIRI}${name}Policy`);
   const permissionNode = namedNode(`${baseIRI}${name}Permission`);
 
   // Policy triples

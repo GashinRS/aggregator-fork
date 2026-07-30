@@ -77,6 +77,152 @@ export class KvasirManagement {
     }
   }
 
+  /**
+   * Ensure the pod-wide UMA delegation tuple exists without attempting to
+   * insert it again on every setup run.
+   */
+  public async ensurePodDelegatedToUMA(): Promise<"created" | "unchanged"> {
+    const relationsUri = `${this.podUrl}/rebac/relationships`;
+    const visitedPages = new Set<string>();
+    let nextPage: string | undefined = `${relationsUri}?pageSize=100`;
+
+    // Kvasir/OpenFGA bounds relationship page sizes. Follow its standard
+    // rel="next" cursor links instead of requesting one oversized page.
+    while (nextPage) {
+      if (visitedPages.has(nextPage)) {
+        throw new Error(`Kvasir returned a repeated relationships page: ${nextPage}`);
+      }
+      visitedPages.add(nextPage);
+
+      const readResponse = await fetch(nextPage, {
+        method: "GET",
+        headers: {
+          "Accept": "application/ld+json",
+          "Authorization": `Bearer ${await this.auth.getAccessToken()}`,
+        },
+      });
+
+      if (!readResponse.ok) {
+        throw new Error(
+          `Could not read Kvasir relationships for ${this.podUrl}: ${readResponse.status} ${await readResponse.text()}`
+        );
+      }
+
+      const relationships = await readResponse.json() as unknown;
+      if (this.containsUmaDelegation(relationships)) {
+        return "unchanged";
+      }
+
+      nextPage = this.nextLink(readResponse.headers.get("link"), relationsUri);
+    }
+
+    const createResponse = await fetch(relationsUri, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/ld+json",
+        "Authorization": `Bearer ${await this.auth.getAccessToken()}`,
+      },
+      body: JSON.stringify({
+        "@context": {
+          "kss": "https://kvasir.discover.ilabt.imec.be/vocab#",
+          "kss-fga": "https://kvasir.discover.ilabt.imec.be/fine-grained-access#",
+        },
+        "kss:insert": [
+          {
+            "@id": "urn:kvasir-wildcard",
+            "@type": "kss-fga:User",
+            "kss-fga:owner": {
+              "@id": this.podUrl,
+              "@type": "kss-fga:Resource",
+              "kss-fga:external_access": {
+                "@id": "kss-fga:Uma",
+              },
+            },
+          },
+        ],
+      }),
+    });
+
+    if (!createResponse.ok) {
+      throw new Error(
+        `Could not delegate ${this.podUrl} to UMA: ${createResponse.status} ${await createResponse.text()}`
+      );
+    }
+
+    return "created";
+  }
+
+  private nextLink(linkHeader: string | null, baseUrl: string): string | undefined {
+    if (!linkHeader) {
+      return undefined;
+    }
+
+    for (const link of linkHeader.split(",")) {
+      const target = link.match(/^\s*<([^>]+)>/);
+      if (target?.[1] && /;\s*rel\s*=\s*"?next"?/i.test(link)) {
+        return new URL(target[1], baseUrl).toString();
+      }
+    }
+
+    return undefined;
+  }
+
+  private containsUmaDelegation(value: unknown): boolean {
+    if (Array.isArray(value)) {
+      return value.some((entry) => this.containsUmaDelegation(entry));
+    }
+
+    if (value === null || typeof value !== "object") {
+      return false;
+    }
+
+    const node = value as Record<string, unknown>;
+    if (node["@id"] === "urn:kvasir-wildcard") {
+      const owner = this.valuesForRelation(node, "owner");
+      if (owner.some((entry) => this.isUmaDelegatedPod(entry))) {
+        return true;
+      }
+    }
+
+    return Object.values(node).some((entry) => this.containsUmaDelegation(entry));
+  }
+
+  private isUmaDelegatedPod(value: unknown): boolean {
+    if (Array.isArray(value)) {
+      return value.some((entry) => this.isUmaDelegatedPod(entry));
+    }
+
+    if (value === null || typeof value !== "object") {
+      return false;
+    }
+
+    const node = value as Record<string, unknown>;
+    if (node["@id"] !== this.podUrl) {
+      return false;
+    }
+
+    return this.valuesForRelation(node, "external_access").some((entry) => {
+      if (entry === null || typeof entry !== "object") {
+        return false;
+      }
+
+      const id = (entry as Record<string, unknown>)["@id"];
+      return typeof id === "string" && /(?:#|:)uma$/i.test(id);
+    });
+  }
+
+  private valuesForRelation(node: Record<string, unknown>, relation: string): unknown[] {
+    const matchingValue = Object.entries(node).find(([key]) =>
+      key === `kss-fga:${relation}` || key.endsWith(`#${relation}`)
+    )?.[1];
+
+    if (matchingValue === undefined) {
+      return [];
+    }
+
+    return Array.isArray(matchingValue) ? matchingValue : [matchingValue];
+  }
+
   public async registerPolicies(turtle: string) {
     const policyUri = `${this.umaUrl}/policies`;
 
@@ -99,6 +245,85 @@ export class KvasirManagement {
     } catch (err) {
       console.error("Request failed:", err);
     }
+  }
+
+  /**
+   * Create a policy with a stable ID, or completely replace the existing
+   * policy with that ID. This makes setup scripts safe to run repeatedly.
+   */
+  public async upsertPolicy(policyId: string, turtle: string): Promise<"created" | "updated"> {
+    const policyContainerUri = `${this.umaUrl}/policies`;
+    const policyUri = `${policyContainerUri}/${encodeURIComponent(policyId)}`;
+    const readResponse = await fetch(policyUri, {
+      method: "GET",
+      headers: {
+        "Accept": "text/turtle",
+        "Authorization": `Bearer ${await this.auth.getAccessToken()}`,
+      },
+    });
+
+    if (readResponse.ok) {
+      const updateResponse = await fetch(policyUri, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "text/turtle",
+          "Authorization": `Bearer ${await this.auth.getIdToken()}`,
+        },
+        body: turtle,
+      });
+
+      if (!updateResponse.ok) {
+        throw new Error(
+          `Could not update UMA policy ${policyId}: ${updateResponse.status} ${await updateResponse.text()}`
+        );
+      }
+
+      return "updated";
+    }
+
+    if (readResponse.status !== 404) {
+      throw new Error(
+        `Could not check UMA policy ${policyId}: ${readResponse.status} ${await readResponse.text()}`
+      );
+    }
+
+    const createResponse = await fetch(policyContainerUri, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/turtle",
+        "Authorization": `Bearer ${await this.auth.getIdToken()}`,
+      },
+      body: turtle,
+    });
+
+    if (createResponse.ok) {
+      return "created";
+    }
+
+    // If another setup process created the deterministic policy between our
+    // GET and POST, converge by replacing it instead of failing on conflict.
+    if (createResponse.status === 409) {
+      const updateResponse = await fetch(policyUri, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "text/turtle",
+          "Authorization": `Bearer ${await this.auth.getIdToken()}`,
+        },
+        body: turtle,
+      });
+
+      if (updateResponse.ok) {
+        return "updated";
+      }
+
+      throw new Error(
+        `Could not update concurrently-created UMA policy ${policyId}: ${updateResponse.status} ${await updateResponse.text()}`
+      );
+    }
+
+    throw new Error(
+      `Could not create UMA policy ${policyId}: ${createResponse.status} ${await createResponse.text()}`
+    );
   }
 
   public async readPolicies(assigner: string) {
