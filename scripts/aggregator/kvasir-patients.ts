@@ -11,7 +11,7 @@ const EVAL_MEDIUM_PATIENT_COUNT = 31;
 // Add a prefix here to create `<prefix>1` through `<prefix>31`, with each
 // client assigned to the Kvasir server whose number matches its suffix.
 const ALL_SERVER_PATIENT_PREFIXES = ["newtest"];
-const ALL_SERVER_PATIENT_SUFFIXES = ["low", "med", "high"];
+const ALL_SERVER_PATIENT_SUFFIXES = ["low", "med"];
 
 const EXTRA_KVASIR_PATIENT_SOURCES: KvasirPatientSource[] = [
   {
@@ -52,6 +52,19 @@ const KVASIR_SERVER_IPS: Record<number, string> = {
   29: "10.10.221.6",
   30: "10.10.221.120",
   31: "10.10.218.66",
+};
+
+// High-baseline patients live on dedicated hosts. Keeping this mapping
+// separate prevents p1high from being silently resolved to kvasir1.
+const HIGH_SERVER_IPS: Record<number, string> = {
+  1: "10.10.219.81",
+  2: "10.10.222.220",
+  3: "10.10.220.23",
+  4: "10.10.221.8",
+  5: "10.10.223.223",
+  6: "10.10.221.29",
+  7: "10.10.216.153",
+  8: "10.10.217.110",
 };
 
 function parsePatientNumber(patient: string): number | undefined {
@@ -125,6 +138,13 @@ function allServerPatientSources(): KvasirPatientSource[] {
   return [...prefixedSources, ...suffixedSources];
 }
 
+function highPatientSources(): KvasirPatientSource[] {
+  return Object.entries(HIGH_SERVER_IPS).map(([rawIndex, ip]) => ({
+    client: `hightest${rawIndex}`,
+    server: `https://${ip}`,
+  }));
+}
+
 function evalPatientSources(): KvasirPatientSource[] {
   const low = Array.from({ length: EVAL_LOW_PATIENT_COUNT }, (_, index) =>
     evalSourceFor(`eval-low${index + 1}`, index + 1)
@@ -140,12 +160,19 @@ export function kvasirPatientSources(count = patientCount()): KvasirPatientSourc
   return [
     ...numberedPatientSources(count),
     ...allServerPatientSources(),
+    ...highPatientSources(),
     ...evalPatientSources(),
     ...EXTRA_KVASIR_PATIENT_SOURCES,
   ];
 }
 
 export function kvasirServerForPatient(patient: string, fallbackServer: string): string {
+  const highPatient = /^p(\d+)high$/.exec(patient);
+  if (highPatient) {
+    const ip = HIGH_SERVER_IPS[Number(highPatient[1])];
+    return ip ? `https://${ip}` : fallbackServer;
+  }
+
   const patientNumber = parsePatientNumber(patient);
   if (!patientNumber) {
     return fallbackServer;
