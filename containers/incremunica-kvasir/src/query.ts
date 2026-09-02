@@ -13,6 +13,14 @@ const STREAM_RECONNECT_MAX_DELAY_MS = parseInt(process.env.STREAM_RECONNECT_MAX_
 const STREAM_RECONNECT_BACKOFF_FACTOR = parseFloat(process.env.STREAM_RECONNECT_BACKOFF_FACTOR || "2");
 const STREAM_REPLAY_SETTLE_MS = parseInt(process.env.STREAM_REPLAY_SETTLE_MS || "30000", 10);
 const INITIAL_VIEW_SETTLE_MS = parseInt(process.env.INITIAL_VIEW_SETTLE_MS || "30000", 10);
+// A high-rate source may never produce a quiet interval. Once every source has
+// opened its subscription, cap how long readiness can be postponed. Bindings
+// processed after this boundary are emitted through the live-results stream,
+// so crossing the boundary while data is arriving does not lose observations.
+const INITIAL_VIEW_MAX_WAIT_MS = parseInt(
+  process.env.INITIAL_VIEW_MAX_WAIT_MS || "15000",
+  10,
+);
 
 const streamingDispatcher = new Agent({
   bodyTimeout: 0,
@@ -63,7 +71,23 @@ export async function querySources(
   const readyEndpoints = new Set<string>();
   let initialBoundaryComplete = false;
   let initialBoundaryTimer: ReturnType<typeof setTimeout> | undefined;
+  let initialBoundaryMaxTimer: ReturnType<typeof setTimeout> | undefined;
   let initialBoundaryGeneration = 0;
+
+  const completeInitialBoundary = (reason: string) => {
+    if (initialBoundaryComplete) return;
+    initialBoundaryComplete = true;
+    if (initialBoundaryTimer) {
+      clearTimeout(initialBoundaryTimer);
+      initialBoundaryTimer = undefined;
+    }
+    if (initialBoundaryMaxTimer) {
+      clearTimeout(initialBoundaryMaxTimer);
+      initialBoundaryMaxTimer = undefined;
+    }
+    console.log(`[QUERY] Initial bindings ready (${reason})`);
+    onInitialQueryReady?.();
+  };
 
   const scheduleInitialBoundary = () => {
     if (
@@ -71,6 +95,18 @@ export async function querySources(
       readyEndpoints.size !== normalizedEndpoints.size
     ) {
       return;
+    }
+
+    // Start this timer only once. Unlike the quiet-period timer below, live
+    // additions deliberately do not reset it.
+    if (!initialBoundaryMaxTimer) {
+      initialBoundaryMaxTimer = setTimeout(() => {
+        void mutex.runExclusive(() => {
+          completeInitialBoundary(
+            `maximum ${INITIAL_VIEW_MAX_WAIT_MS}ms wait reached while updates continued`,
+          );
+        });
+      }, Math.max(0, INITIAL_VIEW_MAX_WAIT_MS));
     }
 
     if (initialBoundaryTimer) {
@@ -93,11 +129,9 @@ export async function querySources(
           return;
         }
 
-        initialBoundaryComplete = true;
-        console.log(
-          `[QUERY] Initial bindings settled after ${INITIAL_VIEW_SETTLE_MS}ms without an update`,
+        completeInitialBoundary(
+          `${INITIAL_VIEW_SETTLE_MS}ms without an update`,
         );
-        onInitialQueryReady?.();
       });
     }, Math.max(0, INITIAL_VIEW_SETTLE_MS));
   };
